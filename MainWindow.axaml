@@ -1,0 +1,118 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="ModbusTestAvalonia.MainWindow"
+        Title="Modbus Master Test Tool (Avalonia)" Width="1050" Height="700">
+
+	<Grid ColumnDefinitions="*, 280" Margin="15">
+
+		<Grid Grid.Column="0" RowDefinitions="Auto, Auto, Auto, *, Auto" Margin="0,0,15,0">
+
+			<StackPanel Grid.Row="0" Orientation="Horizontal" Spacing="10" Margin="0,0,0,15">
+				<ComboBox Name="cmbConnectionType" SelectedIndex="0" Width="190" SelectionChanged="CmbConnectionType_SelectionChanged">
+					<ComboBoxItem Content="Modbus TCP/IP"/>
+					<ComboBoxItem Content="Serial Port (RTU)"/>
+					<ComboBoxItem Content="Modbus UDP/IP"/>
+					<ComboBoxItem Content="Modbus RTU Over TCP/IP"/>
+					<ComboBoxItem Content="Modbus RTU Over UDP/IP"/>
+				</ComboBox>
+
+				<TextBlock Name="lblIpAddress" Text="IP:" VerticalAlignment="Center" FontWeight="Bold"/>
+				<TextBox Name="txtIpAddress" Text="127.0.0.1" Width="110"/>
+
+				<TextBlock Name="lblPort" Text="Port:" VerticalAlignment="Center" FontWeight="Bold"/>
+				<TextBox Name="txtPort" Text="502" Width="50"/>
+
+				<TextBlock Text="Intv[ms]:" VerticalAlignment="Center" FontWeight="Bold"/>
+				<TextBox Name="txtPollInterval" Text="1000" Width="50"/>
+
+				<Button Name="btnConnect" Content="Connect" Click="BtnConnect_Click" Width="100" HorizontalContentAlignment="Center"/>
+				
+			</StackPanel>
+
+			<StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="10" Margin="0,0,0,15">
+				<TextBlock Text="Slave ID:" VerticalAlignment="Center"/>
+				<TextBox Name="txtSlaveId" Text="1" Width="40"/>
+
+				<TextBlock Text="Start:" VerticalAlignment="Center"/>
+				<TextBox Name="txtStartAddress" Text="0" Width="60"/>
+
+				<TextBlock Text="Quantity:" VerticalAlignment="Center"/>
+				<TextBox Name="txtQuantity" Text="10" Width="60"/>
+
+				<ComboBox Name="cmbFunction" SelectedIndex="2" Width="180">
+					<ComboBoxItem Content="01 Coil Status (0x)"/>
+					<ComboBoxItem Content="02 Input Status (1x)"/>
+					<ComboBoxItem Content="03 Holding Register (4x)"/>
+					<ComboBoxItem Content="04 Input Registers (3x)"/>
+				</ComboBox>
+
+				<ComboBox Name="cmbDataType" SelectedIndex="1" Width="135">
+					<ComboBoxItem Content="Signed"/>
+					<ComboBoxItem Content="Unsigned"/>
+					<ComboBoxItem Content="Hex"/>
+					<ComboBoxItem Content="Binary"/>
+					<ComboBoxItem Content="Float"/>
+					<ComboBoxItem Content="Float inverse"/>
+					<ComboBoxItem Content="Double"/>
+					<ComboBoxItem Content="Double Inverse"/>
+					<ComboBoxItem Content="Long"/>
+					<ComboBoxItem Content="Long Inverse"/>
+				</ComboBox>
+			</StackPanel>
+
+			<StackPanel Grid.Row="2" Orientation="Horizontal" Spacing="10" Margin="0,0,0,15">
+				<TextBlock Text="Write Address:" VerticalAlignment="Center" FontWeight="SemiBold"/>
+				<TextBox Name="txtWriteAddress" Width="60"/>
+
+				<TextBlock Text="Write Value:" VerticalAlignment="Center" FontWeight="SemiBold" Margin="15,0,0,0"/>
+				<TextBox Name="txtWriteValue" Width="80"/>
+
+				<Button Name="btnWrite" Content="Write" Click="BtnWrite_Click" Width="80" HorizontalContentAlignment="Center"/>
+			</StackPanel>
+
+			<DataGrid Name="dataGridViewRegisters" x:CompileBindings="False" Grid.Row="3" AutoGenerateColumns="False" Margin="0,0,0,15" BorderBrush="Gray" BorderThickness="1">
+				<DataGrid.Columns>
+					<DataGridTextColumn Header="Address" Binding="{Binding Address}" IsReadOnly="True" Width="150"/>
+					<DataGridTextColumn Header="Value" Binding="{Binding Value}" Width="*"/>
+				</DataGrid.Columns>
+			</DataGrid>
+
+			<Border Grid.Row="4" Background="Black" BorderThickness="1" BorderBrush="Gray" Height="120">
+				<ScrollViewer>
+					<ItemsControl Name="lstLogs" x:CompileBindings="False" Margin="5">
+						<ItemsControl.ItemTemplate>
+							<DataTemplate>
+								<TextBlock Text="{Binding Message}" Foreground="{Binding Color}" FontFamily="Consolas" TextWrapping="Wrap"/>
+							</DataTemplate>
+						</ItemsControl.ItemTemplate>
+					</ItemsControl>
+				</ScrollViewer>
+			</Border>
+		</Grid>
+
+		<Border Grid.Column="1" BorderBrush="Gray" BorderThickness="1" CornerRadius="5" Padding="10">
+			<Grid RowDefinitions="Auto, Auto, Auto, *">
+				<TextBlock Text="Device Management" FontWeight="Bold" FontSize="16" Margin="0,0,0,15"/>
+
+				<StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="5" Margin="0,0,0,10">
+					<TextBox Name="txtNewDevName" Watermark="Device Name" Width="160"/>
+					<TextBox Name="txtNewDevId" Watermark="ID" Width="60"/>
+				</StackPanel>
+
+				<StackPanel Grid.Row="2" Orientation="Horizontal" Spacing="10" Margin="0,0,0,15">
+					<Button Name="btnAddDevice" Content="Add Device" Click="BtnAddDevice_Click" Width="110" HorizontalContentAlignment="Center"/>
+					<Button Name="btnDeleteDevice" Content="Delete" Click="BtnDeleteDevice_Click" Width="110" HorizontalContentAlignment="Center"/>
+				</StackPanel>
+
+				<ListBox Name="lstDevices" x:CompileBindings="False" Grid.Row="3" SelectionChanged="LstDevices_SelectionChanged" BorderThickness="1" BorderBrush="LightGray">
+					<ListBox.ItemTemplate>
+						<DataTemplate>
+							<TextBlock Text="{Binding Name}" FontWeight="Medium" Padding="0,5"/>
+						</DataTemplate>
+					</ListBox.ItemTemplate>
+				</ListBox>
+			</Grid>
+		</Border>
+
+	</Grid>
+</Window>
