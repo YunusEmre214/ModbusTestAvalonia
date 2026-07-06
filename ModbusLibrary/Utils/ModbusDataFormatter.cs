@@ -1,6 +1,6 @@
 ﻿using System;
 
-namespace ModbusLibrary.Utils 
+namespace ModbusLibrary.Utils
 {
     public static class ModbusDataFormatter
     {
@@ -33,24 +33,28 @@ namespace ModbusLibrary.Utils
                     case "Unsigned": return registers[startIndex].ToString();
                     case "Hex": return "0x" + registers[startIndex].ToString("X4");
                     case "Binary": return Convert.ToString(registers[startIndex], 2).PadLeft(16, '0');
+
                     case "Float":
                         if (startIndex + 1 >= registers.Length) return "N/A";
-                        return BitConverter.ToSingle(GetBytesForBitConverter(registers, startIndex, 2, true), 0).ToString("0.000");
+                        return BitConverter.ToSingle(GetBytesForBitConverter(registers, startIndex, 2, true), 0).ToString("0.#########");
                     case "Float inverse":
                         if (startIndex + 1 >= registers.Length) return "N/A";
-                        return BitConverter.ToSingle(GetBytesForBitConverter(registers, startIndex, 2, false), 0).ToString("0.000");
+                        return BitConverter.ToSingle(GetBytesForBitConverter(registers, startIndex, 2, false), 0).ToString("0.#########");
+
                     case "Long":
                         if (startIndex + 1 >= registers.Length) return "N/A";
                         return BitConverter.ToInt32(GetBytesForBitConverter(registers, startIndex, 2, true), 0).ToString();
                     case "Long Inverse":
                         if (startIndex + 1 >= registers.Length) return "N/A";
                         return BitConverter.ToInt32(GetBytesForBitConverter(registers, startIndex, 2, false), 0).ToString();
+
                     case "Double":
                         if (startIndex + 3 >= registers.Length) return "N/A";
-                        return BitConverter.ToDouble(GetBytesForBitConverter(registers, startIndex, 4, true), 0).ToString("0.0000");
+                        return BitConverter.ToDouble(GetBytesForBitConverter(registers, startIndex, 4, true), 0).ToString("0.###############");
                     case "Double Inverse":
                         if (startIndex + 3 >= registers.Length) return "N/A";
-                        return BitConverter.ToDouble(GetBytesForBitConverter(registers, startIndex, 4, false), 0).ToString("0.0000");
+                        return BitConverter.ToDouble(GetBytesForBitConverter(registers, startIndex, 4, false), 0).ToString("0.###############");
+
                     default: return registers[startIndex].ToString();
                 }
             }

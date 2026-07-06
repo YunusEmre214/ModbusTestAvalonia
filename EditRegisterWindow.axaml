@@ -7,7 +7,7 @@
 
 		<StackPanel Grid.Row="0" Orientation="Horizontal" Spacing="15" VerticalAlignment="Center">
 			<TextBlock Text="Value:" VerticalAlignment="Center" FontWeight="SemiBold"/>
-			<TextBox Name="txtValue" Width="120"/>
+			<TextBox Name="txtValue" Width="120" TextChanged="TxtValue_TextChanged"/>
 		</StackPanel>
 
 		<StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="10" HorizontalAlignment="Right" VerticalAlignment="Bottom">

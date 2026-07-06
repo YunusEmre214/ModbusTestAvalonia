@@ -35,6 +35,7 @@ namespace ModbusLibrary.Master
         // 03 Read Holding Registers
         public async Task<ushort[]> ReadHoldingRegistersAsync(byte unitId, ushort startAddress, ushort quantity)
         {
+            
             byte[] req = ModbusFrameEncoder.EncodeReadRequest(++_transactionId, unitId, (byte)FunctionCode.ReadHoldingRegisters, startAddress, quantity);
             byte[] res = await _transport.SendAndReceiveAsync(req);
             return ModbusFrameDecoder.DecodeReadRegistersResponse(res, (byte)FunctionCode.ReadHoldingRegisters);

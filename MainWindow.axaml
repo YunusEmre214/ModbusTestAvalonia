@@ -17,13 +17,13 @@
 				</ComboBox>
 
 				<TextBlock Name="lblIpAddress" Text="IP:" VerticalAlignment="Center" FontWeight="Bold"/>
-				<TextBox Name="txtIpAddress" Text="127.0.0.1" Width="110"/>
+				<TextBox Name="txtIpAddress" Text="127.0.0.1" Width="110" TextChanged="IpTextBox_TextChanged"/>
 
 				<TextBlock Name="lblPort" Text="Port:" VerticalAlignment="Center" FontWeight="Bold"/>
-				<TextBox Name="txtPort" Text="502" Width="50"/>
+				<TextBox Name="txtPort" Text="502" Width="50" TextChanged="NumericTextBox_TextChanged"/>
 
 				<TextBlock Text="Intv[ms]:" VerticalAlignment="Center" FontWeight="Bold"/>
-				<TextBox Name="txtPollInterval" Text="1000" Width="50"/>
+				<TextBox Name="txtPollInterval" Text="1000" Width="50" TextChanged="NumericTextBox_TextChanged"/>
 
 				<Button Name="btnConnect" Content="Connect" Click="BtnConnect_Click" Width="100" HorizontalContentAlignment="Center"/>
 				
@@ -31,13 +31,13 @@
 
 			<StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="10" Margin="0,0,0,15">
 				<TextBlock Text="Slave ID:" VerticalAlignment="Center"/>
-				<TextBox Name="txtSlaveId" Text="1" Width="40"/>
+				<TextBox Name="txtSlaveId" Text="1" Width="40" TextChanged="NumericTextBox_TextChanged"/>
 
 				<TextBlock Text="Start:" VerticalAlignment="Center"/>
-				<TextBox Name="txtStartAddress" Text="0" Width="60"/>
+				<TextBox Name="txtStartAddress" Text="0" Width="60" TextChanged="NumericTextBox_TextChanged"/>
 
 				<TextBlock Text="Quantity:" VerticalAlignment="Center"/>
-				<TextBox Name="txtQuantity" Text="10" Width="60"/>
+				<TextBox Name="txtQuantity" Text="10" Width="60" TextChanged="NumericTextBox_TextChanged"/>
 
 				<ComboBox Name="cmbFunction" SelectedIndex="2" Width="180">
 					<ComboBoxItem Content="01 Coil Status (0x)"/>
@@ -62,10 +62,10 @@
 
 			<StackPanel Grid.Row="2" Orientation="Horizontal" Spacing="10" Margin="0,0,0,15">
 				<TextBlock Text="Write Address:" VerticalAlignment="Center" FontWeight="SemiBold"/>
-				<TextBox Name="txtWriteAddress" Width="60"/>
+				<TextBox Name="txtWriteAddress" Width="60" TextChanged="NumericTextBox_TextChanged"/>
 
 				<TextBlock Text="Write Value:" VerticalAlignment="Center" FontWeight="SemiBold" Margin="15,0,0,0"/>
-				<TextBox Name="txtWriteValue" Width="80"/>
+				<TextBox Name="txtWriteValue" Width="80" TextChanged="WriteValueTextBox_TextChanged"/>
 
 				<Button Name="btnWrite" Content="Write" Click="BtnWrite_Click" Width="80" HorizontalContentAlignment="Center"/>
 			</StackPanel>
@@ -97,7 +97,7 @@
 
 				<StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="5" Margin="0,0,0,10">
 					<TextBox Name="txtNewDevName" Watermark="Device Name" Width="160"/>
-					<TextBox Name="txtNewDevId" Watermark="ID" Width="60"/>
+					<TextBox Name="txtNewDevId" Watermark="ID" Width="60" TextChanged="NumericTextBox_TextChanged"/>
 				</StackPanel>
 
 				<StackPanel Grid.Row="2" Orientation="Horizontal" Spacing="10" Margin="0,0,0,15">

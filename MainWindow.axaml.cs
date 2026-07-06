@@ -2,6 +2,7 @@ using Avalonia.Controls;
 using Avalonia.Interactivity;
 using Avalonia.Threading;
 using System;
+using System.Linq;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
@@ -16,6 +17,7 @@ namespace ModbusTestAvalonia
         private ModbusMaster? _master;
         private ITransport? _transport;
         private bool _isConnected = false;
+        private bool _isSystemActive = false;
 
         public ObservableCollection<RegisterRow> RegisterData { get; set; } = new ObservableCollection<RegisterRow>();
         public ObservableCollection<SlaveDevice> DeviceList { get; set; } = new ObservableCollection<SlaveDevice>();
@@ -37,7 +39,7 @@ namespace ModbusTestAvalonia
             lstDevices.ItemsSource = DeviceList;
             lstLogs.ItemsSource = LogData; // We linked the log list
 
-            
+
 
             cmbFunction.DropDownOpened += (s, e) => { if (_isConnected) timerPoll.Stop(); };
             cmbFunction.DropDownClosed += (s, e) => { if (_isConnected) timerPoll.Start(); };
@@ -47,79 +49,87 @@ namespace ModbusTestAvalonia
 
         private async void BtnConnect_Click(object sender, RoutedEventArgs e)
         {
+            // 1. KULLANICI SİSTEMİ KAPATMAK İSTİYORSA (Buton Disconnect iken tıklandıysa)
+            if (btnConnect.Content?.ToString() == "Disconnect")
+            {
+                _isSystemActive = false; // Sistemi komple kapat
+                timerPoll.Stop();
+                _transport?.Disconnect();
+                _isConnected = false;
+                btnConnect.Content = "Connect";
+                AddLog("System stopped manually.");
+                return;
+            }
+
+            // 2. SİSTEMİ BAŞLATMA VEYA CİHAZ GEÇİŞİ YAPMA
+            _isSystemActive = true;
+            btnConnect.Content = "Disconnect"; // Sistemi çalışıyor (aktif) olarak göster
+
             if (_isConnected)
             {
                 timerPoll.Stop();
                 _transport?.Disconnect();
                 _isConnected = false;
-                AddLog("Old connection closed, reconnecting...");
-                await System.Threading.Tasks.Task.Delay(500); 
+                await System.Threading.Tasks.Task.Delay(100);
             }
-            if (!_isConnected)
+
+            if (!byte.TryParse(txtSlaveId.Text, out _) ||
+                !ushort.TryParse(txtStartAddress.Text, out _) ||
+                !ushort.TryParse(txtQuantity.Text, out ushort q) || q <= 0)
             {
-                if (!byte.TryParse(txtSlaveId.Text, out _) ||
-                    !ushort.TryParse(txtStartAddress.Text, out _) ||
-                    !ushort.TryParse(txtQuantity.Text, out ushort q) || q <= 0)
-                {
-                    AddLog("Warning: Please fix the Slave ID, Start Address, or Quantity fields before connecting.");
-                    return; 
-                }
-                try
-                {
-                    string ipOrCom = txtIpAddress.Text ?? "127.0.0.1";
-                    int portOrBaud = int.Parse(txtPort.Text ?? "502");
-                    string selectedConnection = (cmbConnectionType.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? "Modbus TCP/IP";
-
-                    if (selectedConnection == "Modbus TCP/IP")
-                    {
-                        _transport = new TcpTransport();
-                        await _transport.ConnectAsync(ipOrCom, portOrBaud);
-                    }
-                    else if (selectedConnection == "Modbus UDP/IP")
-                    {
-                        _transport = new UdpTransport();
-                        await _transport.ConnectAsync(ipOrCom, portOrBaud);
-                    }
-                    else if (selectedConnection == "Modbus RTU Over TCP/IP")
-                    {
-                        _transport = new RtuOverTcpTransport();
-                        await _transport.ConnectAsync(ipOrCom, portOrBaud);
-                    }
-                    else if (selectedConnection == "Modbus RTU Over UDP/IP")
-                    {
-                        _transport = new RtuOverUdpTransport();
-                        await _transport.ConnectAsync(ipOrCom, portOrBaud);
-                    }
-                    else if (selectedConnection == "Serial Port (RTU)")
-                    {
-                        _transport = new SerialTransport();
-                        await _transport.ConnectAsync(ipOrCom, portOrBaud);
-                    }
-
-                    _master = new ModbusMaster(_transport);
-
-                    _isConnected = true;
-                    btnConnect.Content = "Disconnect";
-
-                    AddLog($"Connection is Correct via {selectedConnection}");
-                    if (int.TryParse(txtPollInterval.Text, out int interval))
-                    {
-                        timerPoll.Interval = TimeSpan.FromMilliseconds(interval);
-                    }
-                    timerPoll.Start();
-                }
-                catch (Exception ex)
-                {
-                    AddLog("Connection Error: Unable to establish a connection with the target device.");
-                }
-            }
-            else
-            {
-                timerPoll.Stop();
-                _transport?.Disconnect();
-                _isConnected = false;
+                AddLog("Warning: Please fix the fields before connecting.");
+                _isSystemActive = false;
                 btnConnect.Content = "Connect";
-                AddLog("The connection was lost.");
+                return;
+            }
+
+            try
+            {
+                string ipOrCom = txtIpAddress.Text ?? "127.0.0.1";
+                int portOrBaud = int.Parse(txtPort.Text ?? "502");
+                string selectedConnection = (cmbConnectionType.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? "Modbus TCP/IP";
+
+                if (selectedConnection == "Modbus TCP/IP")
+                {
+                    _transport = new TcpTransport();
+                    await _transport.ConnectAsync(ipOrCom, portOrBaud);
+                }
+                else if (selectedConnection == "Modbus UDP/IP")
+                {
+                    _transport = new UdpTransport();
+                    await _transport.ConnectAsync(ipOrCom, portOrBaud);
+                }
+                else if (selectedConnection == "Modbus RTU Over TCP/IP")
+                {
+                    _transport = new RtuOverTcpTransport();
+                    await _transport.ConnectAsync(ipOrCom, portOrBaud);
+                }
+                else if (selectedConnection == "Modbus RTU Over UDP/IP")
+                {
+                    _transport = new RtuOverUdpTransport();
+                    await _transport.ConnectAsync(ipOrCom, portOrBaud);
+                }
+                else if (selectedConnection == "Serial Port (RTU)")
+                {
+                    _transport = new SerialTransport();
+                    await _transport.ConnectAsync(ipOrCom, portOrBaud);
+                }
+
+                _master = new ModbusMaster(_transport);
+                _isConnected = true; // Fiziksel bağlantı başarılı
+
+                AddLog($"Connection is Correct via {selectedConnection}");
+                if (int.TryParse(txtPollInterval.Text, out int interval))
+                {
+                    timerPoll.Interval = TimeSpan.FromMilliseconds(interval);
+                }
+                timerPoll.Start();
+            }
+            catch (Exception ex)
+            {
+                _isConnected = false; // Fiziksel bağlantı başarısız
+                // DİKKAT: _isSystemActive değişkenini false YAPMIYORUZ! Sistem hala açık, sadece bu cihaz kapalı.
+                AddLog("Connection Error: Target device is offline or unreachable.");
             }
         }
 
@@ -213,10 +223,13 @@ namespace ModbusTestAvalonia
             }
             catch (Exception ex)
             {
-                AddLog("Reading Error: Connection lost. The remote host has closed the connection.");
-                timerPoll.Stop();
-                _isConnected = false;
-                btnConnect.Content = "Connect";
+                if (_isConnected) // Sadece koptuğu an 1 kere çalışır, spamı önler
+                {
+                    AddLog("Reading Error: Connection lost. Device went offline.");
+                    _transport?.Disconnect();
+                    _isConnected = false; // Fiziksel bağlantıyı kestik
+                    // DİKKAT: timerPoll.Stop() YAZMIYORUZ! Sistem çalışmaya devam etsin.
+                }
             }
         }
 
@@ -239,7 +252,7 @@ namespace ModbusTestAvalonia
                     {
                         Address = $"{prefix}[{startAddress + (i * step)}]",
                         Value = "0",
-                        
+
                         RawAddress = startAddress + (i * step)
                     });
                 }
@@ -254,6 +267,103 @@ namespace ModbusTestAvalonia
                 else if (regValues != null)
                 {
                     RegisterData[i].Value = ModbusLibrary.Utils.ModbusDataFormatter.FormatValue(regValues, i * step, selectedType);
+                }
+            }
+        }
+        // FILTER THAT ALLOWS ONLY NUMBERS
+        private void NumericTextBox_TextChanged(object? sender, TextChangedEventArgs e)
+        {
+            if (sender is TextBox textBox && !string.IsNullOrEmpty(textBox.Text))
+            {
+                // Filter only digit characters (0-9)
+                string originalText = textBox.Text;
+                string newText = new string(originalText.Where(char.IsDigit).ToArray());
+
+                // If a letter is deleted, update the text and move the cursor to the end.
+                if (originalText != newText)
+                {
+                    textBox.Text = newText;
+                    textBox.CaretIndex = newText.Length;
+                }
+            }
+        }
+
+        // Filter allowing letters, numbers, and dots for IP and COM ports.
+        private void IpTextBox_TextChanged(object? sender, TextChangedEventArgs e)
+        {
+            if (sender is TextBox textBox && !string.IsNullOrEmpty(textBox.Text))
+            {
+                string originalText = textBox.Text;
+                string newText = originalText;
+
+                // Get the currently selected connection type
+                string? selectedConnection = (cmbConnectionType.SelectedItem as ComboBoxItem)?.Content?.ToString();
+
+                if (selectedConnection == "Serial Port (RTU)")
+                {
+                    // IF SERIAL PORT IS SELECTED: Allow only letters and numbers (e.g., COM3, ttyS0)
+                    newText = new string(originalText.Where(char.IsLetterOrDigit).ToArray());
+                }
+                else
+                {
+                    // IF TCP/UDP IS SELECTED: Allow only numbers and periods (e.g., 127.0.0.1)
+                    newText = new string(originalText.Where(c => char.IsDigit(c) || c == '.').ToArray());
+                }
+
+                if (originalText != newText)
+                {
+                    textBox.Text = newText;
+                    textBox.CaretIndex = newText.Length; // Move cursor to the end
+                }
+            }
+        }
+        //Dynamic filter for Write Value Box
+        private void WriteValueTextBox_TextChanged(object? sender, TextChangedEventArgs e)
+        {
+            if (sender is TextBox textBox && !string.IsNullOrEmpty(textBox.Text))
+            {
+                string originalText = textBox.Text;
+                string newText = originalText;
+
+                // Find out which Data Type is currently selected
+                string selectedType = (cmbDataType.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? "Unsigned";
+
+                if (selectedType == "Hex")
+                {
+                    // HEX: Numbers only, letters A-F and 'x'
+                    newText = new string(originalText.Where(c => char.IsDigit(c) || "abcdefABCDEFxX".Contains(c)).ToArray());
+
+                    // LENGTH LIMIT: Maximum 6 characters if starting with "0x" (0xFFFF), 4 characters if not starting with "0x" (FFFF)
+                    int maxLen = newText.StartsWith("0x", StringComparison.OrdinalIgnoreCase) ? 6 : 4;
+                    if (newText.Length > maxLen) newText = newText.Substring(0, maxLen);
+                }
+                else if (selectedType == "Binary")
+                {
+                    // BINARY: Only 0 and 1
+                    newText = new string(originalText.Where(c => c == '0' || c == '1').ToArray());
+
+                    // LENGTH LIMIT: Maximum 16 characters because it's 16-bit (1111111111111111)
+                    if (newText.Length > 16) newText = newText.Substring(0, 16);
+                }
+                else if (selectedType.Contains("Float") || selectedType.Contains("Double") || selectedType.Contains("Signed"))
+                {
+                    // FLOAT / SIGNED: Numbers, Minus (-) and Period/Comma (.,)
+                    newText = new string(originalText.Where(c => char.IsDigit(c) || c == '-' || c == '.' || c == ',').ToArray());
+                }
+                else
+                {
+                    // UNSIGNED: Numbers only
+                    newText = new string(originalText.Where(char.IsDigit).ToArray());
+
+                    // LENGTH LIMIT: Unsigned ushort can be a maximum of 65535 (5 characters)
+                    if (newText.Length > 5) newText = newText.Substring(0, 5);
+                }
+
+                // Update the box if there are forbidden characters in the text entered by the user and they have been deleted.
+                if (originalText != newText)
+                {
+                    textBox.Text = newText;
+                    textBox.CaretIndex = newText.Length; // Move the cursor to the end
                 }
             }
         }
@@ -304,7 +414,7 @@ namespace ModbusTestAvalonia
                         ushort valueToWrite = ModbusLibrary.Utils.ModbusDataFormatter.ParseRegisterValue(txtWriteValue.Text ?? "0", selectedType);
                         await _master.WriteSingleRegisterAsync(slaveId, address, valueToWrite);
 
-                        
+
                         string formattedLogValue = ModbusLibrary.Utils.ModbusDataFormatter.FormatValue(new ushort[] { valueToWrite }, 0, selectedType);
                         AddLog($"Success: {formattedLogValue} was written to Register[{address}].");
                     }
@@ -365,15 +475,7 @@ namespace ModbusTestAvalonia
 
         private void LstDevices_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
-            if (_isConnected)
-            {
-                timerPoll.Stop();
-                _transport?.Disconnect();
-                _isConnected = false;
-                btnConnect.Content = "Connect";
-                AddLog("Device switched. Disconnected from the previous device.");
-            }
-            // 1. Save the current UI values ​​of the (old) device whose selection has been changed to the object.
+            // 1. ESKİ CİHAZIN VERİLERİNİ KAYDET
             if (e.RemovedItems.Count > 0 && e.RemovedItems[0] is SlaveDevice oldDevice)
             {
                 if (byte.TryParse(txtSlaveId.Text, out byte oldId)) oldDevice.SlaveId = oldId;
@@ -387,21 +489,41 @@ namespace ModbusTestAvalonia
                 oldDevice.PollInterval = txtPollInterval.Text ?? "1000";
             }
 
-            // 2. Load the values ​​of the newly selected device into the UI.
+            // 2. YENİ CİHAZA GEÇİŞ VE ARAYÜZ YÜKLEMESİ
             if (lstDevices.SelectedItem is SlaveDevice selectedDevice)
             {
+                // ÇOK KRİTİK: Kullanıcının şu an sisteme bağlı olup olmadığını hafızaya alıyoruz
+                bool wasSystemActive = _isSystemActive;
+
+                // Eğer önceden bağlıysak, arka plandaki eski fiziki bağlantıyı sessizce temizle
+                if (_isConnected)
+                {
+                    timerPoll.Stop();
+                    _transport?.Disconnect();
+                    _isConnected = false;
+                    // DİKKAT: Butonu "Connect" yapmıyoruz, çünkü birazdan otomatik bağlanacağız!
+                }
+
+                // Yeni cihazın değerlerini ekrandaki kutulara doldur
                 cmbConnectionType.SelectedIndex = selectedDevice.SelectedConnectionIndex;
                 txtIpAddress.Text = selectedDevice.IpAddress;
                 txtPort.Text = selectedDevice.Port;
-
                 txtSlaveId.Text = selectedDevice.SlaveId.ToString();
                 cmbFunction.SelectedIndex = selectedDevice.SelectedFunctionIndex;
                 cmbDataType.SelectedIndex = selectedDevice.SelectedDataTypeIndex;
                 txtStartAddress.Text = selectedDevice.StartAddress;
                 txtQuantity.Text = selectedDevice.Quantity;
-                txtPollInterval.Text=selectedDevice.PollInterval;
+                txtPollInterval.Text = selectedDevice.PollInterval;
 
                 AddLog($"Device changed: {selectedDevice.Name}");
+
+                // 3. OTOMATİK YENİDEN BAĞLANMA (Auto-Reconnect)
+                if (wasSystemActive)
+                {
+                    AddLog($"Auto-connecting to {selectedDevice.Name}...");
+                    btnConnect.Content = "Connect"; // Kandırmaca: Sistemin yeni bir köprü kurabilmesi için butonu sıfırlıyoruz
+                    BtnConnect_Click(this, new RoutedEventArgs());
+                }
             }
         }
         private async void DataGridViewRegisters_DoubleTapped(object? sender, Avalonia.Input.TappedEventArgs e)
@@ -420,7 +542,9 @@ namespace ModbusTestAvalonia
                 }
 
                 // We call up the pop-up window we just created
-                var dialog = new EditRegisterWindow(selectedRow.Value);
+                string selectedType = (cmbDataType.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? "Unsigned";
+
+                var dialog = new EditRegisterWindow(selectedRow.Value, selectedType);
 
                 // Open the window as a "Dialog" (The user cannot click on the backend without closing this window)
                 await dialog.ShowDialog(this);
@@ -441,7 +565,7 @@ namespace ModbusTestAvalonia
                         }
                         else if (funcIndex == 2) // Write Register
                         {
-                            string selectedType = (cmbDataType.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? "Unsigned";
+                            //string selectedType = (cmbDataType.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? "Unsigned";
 
                             if (selectedType is "Signed" or "Unsigned" or "Hex" or "Binary")
                             {
@@ -494,13 +618,13 @@ namespace ModbusTestAvalonia
         {
             if (lblIpAddress == null || lblPort == null || txtIpAddress == null || txtPort == null || cmbConnectionType == null) return;
 
-            
+
             if (_isConnected)
             {
                 timerPoll.Stop();
                 _transport?.Disconnect();
                 _isConnected = false;
-                
+
                 btnConnect.Content = "Connect";
                 AddLog("Connection type changed, previous connection closed.");
             }
@@ -560,9 +684,9 @@ namespace ModbusTestAvalonia
         public int SelectedDataTypeIndex { get; set; } = 1;
         public string StartAddress { get; set; } = "0";
         public string Quantity { get; set; } = "10";
-        public string PollInterval { get; set;  } = "1000";
+        public string PollInterval { get; set; } = "1000";
     }
-    
+
 
     // Data model for color logging
     public class LogEntry
@@ -571,5 +695,5 @@ namespace ModbusTestAvalonia
         public string Color { get; set; } = "Lime";
     }
 
-    
+
 }
