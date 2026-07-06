@@ -1,73 +1,75 @@
 using Avalonia.Controls;
 using Avalonia.Interactivity;
 using Avalonia.Threading;
-using ModbusLibrary.Master;
-using ModbusLibrary.Transport;
 using System;
+using System.Linq;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
-using System.Linq;
 using System.Runtime.CompilerServices;
-using System.Text.Json.Serialization;
-using System.Threading;
-using System.Threading.Tasks;
+using ModbusLibrary.Master;
+using ModbusLibrary.Transport;
 
 namespace ModbusTestAvalonia
 {
     public partial class MainWindow : Window
     {
-        private SlaveDevice? _activeDevice;
+        private DispatcherTimer timerPoll;
+        private ModbusMaster? _master;
+        private ITransport? _transport;
+        private bool _isConnected = false;
+        private bool _isSystemActive = false;
 
+        public ObservableCollection<RegisterRow> RegisterData { get; set; } = new ObservableCollection<RegisterRow>();
         public ObservableCollection<SlaveDevice> DeviceList { get; set; } = new ObservableCollection<SlaveDevice>();
+        // List to hold the colored log lines
         public ObservableCollection<LogEntry> LogData { get; set; } = new ObservableCollection<LogEntry>();
-
-        // Fonksiyon/veri tipi ComboBox index -> string eşlemeleri (arka planda ekran olmadan kullanmak için)
-        private static readonly string[] FunctionNames = { "Coil", "Input", "Register", "InpReg" };
-        private static readonly string[] DataTypeNames = { "Unsigned", "Signed", "Hex", "Binary", "Float32", "Double64" }; // kendi ComboBox sıranla eşle
 
         public MainWindow()
         {
+
             InitializeComponent();
             txtPollInterval = this.FindControl<TextBox>("txtPollInterval")!;
 
-            dataGridViewRegisters.ItemsSource = null; // aşağıda aktif cihaz seçilince set edilecek
+            timerPoll = new DispatcherTimer();
+            timerPoll.Interval = TimeSpan.FromMilliseconds(1000);
+            timerPoll.Tick += TimerPoll_Tick;
+
+            dataGridViewRegisters.ItemsSource = RegisterData;
             lstDevices.ItemsSource = DeviceList;
-            lstLogs.ItemsSource = LogData;
+            lstLogs.ItemsSource = LogData; // We linked the log list
 
-            cmbDataType.SelectionChanged += CmbDataType_SelectionChanged;
-            cmbFunction.SelectionChanged += CmbFunction_SelectionChanged;
-        }
-        private void CmbDataType_SelectionChanged(object? sender, SelectionChangedEventArgs e)
-        {
-            if (_activeDevice == null) return;
 
-            _activeDevice.SelectedDataTypeIndex = cmbDataType.SelectedIndex;
 
-            // Grid'in satır sayısı/adresleri de yeniden hesaplansın diye eski veriyi temizle
-            _activeDevice.RegisterData.Clear();
+            cmbFunction.DropDownOpened += (s, e) => { if (_isConnected) timerPoll.Stop(); };
+            cmbFunction.DropDownClosed += (s, e) => { if (_isConnected) timerPoll.Start(); };
+            cmbDataType.DropDownOpened += (s, e) => { if (_isConnected) timerPoll.Stop(); };
+            cmbDataType.DropDownClosed += (s, e) => { if (_isConnected) timerPoll.Start(); };
         }
 
-        private void CmbFunction_SelectionChanged(object? sender, SelectionChangedEventArgs e)
-        {
-            if (_activeDevice == null) return;
-
-            _activeDevice.SelectedFunctionIndex = cmbFunction.SelectedIndex;
-            _activeDevice.RegisterData.Clear();
-        }
-
-        // --- BAĞLAN / KES ---
         private async void BtnConnect_Click(object sender, RoutedEventArgs e)
         {
-            if (_activeDevice == null) { AddLog("Warning: No device selected."); return; }
-
+            // 1. IF THE USER WANTS TO SHUT DOWN THE SYSTEM (If the button was clicked while it was in the Disconnect state)
             if (btnConnect.Content?.ToString() == "Disconnect")
             {
-                StopDevicePolling(_activeDevice);
-                _activeDevice.Transport?.Disconnect();
-                _activeDevice.IsConnected = false;
+                _isSystemActive = false;
+                timerPoll.Stop();
+                _transport?.Disconnect();
+                _isConnected = false;
                 btnConnect.Content = "Connect";
-                AddLog($"{_activeDevice.Name}: Disconnected manually.");
+                AddLog("System stopped manually.");
                 return;
+            }
+
+            // 2. STARTING THE SYSTEM OR SWITCHING OVER A DEVICE
+            _isSystemActive = true;
+            btnConnect.Content = "Disconnect"; 
+
+            if (_isConnected)
+            {
+                timerPoll.Stop();
+                _transport?.Disconnect();
+                _isConnected = false;
+                await System.Threading.Tasks.Task.Delay(100);
             }
 
             if (!byte.TryParse(txtSlaveId.Text, out _) ||
@@ -75,194 +77,207 @@ namespace ModbusTestAvalonia
                 !ushort.TryParse(txtQuantity.Text, out ushort q) || q <= 0)
             {
                 AddLog("Warning: Please fix the fields before connecting.");
+                _isSystemActive = false;
+                btnConnect.Content = "Connect";
                 return;
             }
 
-            // Ekrandaki güncel ayarları cihaza yaz (bağlanmadan önce senkronla)
-            SyncScreenToDevice(_activeDevice);
-
             try
             {
-                string ipOrCom = _activeDevice.IpAddress;
-                int portOrBaud = int.Parse(_activeDevice.Port);
+                string ipOrCom = txtIpAddress.Text ?? "127.0.0.1";
+                int portOrBaud = int.Parse(txtPort.Text ?? "502");
                 string selectedConnection = (cmbConnectionType.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? "Modbus TCP/IP";
 
-                ITransport transport = selectedConnection switch
+                if (selectedConnection == "Modbus TCP/IP")
                 {
-                    "Modbus TCP/IP" => new TcpTransport(),
-                    "Modbus UDP/IP" => new UdpTransport(),
-                    "Modbus RTU Over TCP/IP" => new RtuOverTcpTransport(),
-                    "Modbus RTU Over UDP/IP" => new RtuOverUdpTransport(),
-                    "Serial Port (RTU)" => new SerialTransport(),
-                    _ => new TcpTransport()
-                };
+                    _transport = new TcpTransport();
+                    await _transport.ConnectAsync(ipOrCom, portOrBaud);
+                }
+                else if (selectedConnection == "Modbus UDP/IP")
+                {
+                    _transport = new UdpTransport();
+                    await _transport.ConnectAsync(ipOrCom, portOrBaud);
+                }
+                else if (selectedConnection == "Modbus RTU Over TCP/IP")
+                {
+                    _transport = new RtuOverTcpTransport();
+                    await _transport.ConnectAsync(ipOrCom, portOrBaud);
+                }
+                else if (selectedConnection == "Modbus RTU Over UDP/IP")
+                {
+                    _transport = new RtuOverUdpTransport();
+                    await _transport.ConnectAsync(ipOrCom, portOrBaud);
+                }
+                else if (selectedConnection == "Serial Port (RTU)")
+                {
+                    _transport = new SerialTransport();
+                    await _transport.ConnectAsync(ipOrCom, portOrBaud);
+                }
 
-                await transport.ConnectAsync(ipOrCom, portOrBaud);
+                _master = new ModbusMaster(_transport);
+                _isConnected = true;
 
-                var device = _activeDevice;
-                device.Transport = transport;
-                device.Master = new ModbusMaster(transport);
-                device.IsConnected = true;
-
-                btnConnect.Content = "Disconnect";
-                AddLog($"{device.Name}: Connected via {selectedConnection}");
-
-                StartDevicePolling(device);
+                AddLog($"Connection is Correct via {selectedConnection}");
+                if (int.TryParse(txtPollInterval.Text, out int interval))
+                {
+                    timerPoll.Interval = TimeSpan.FromMilliseconds(interval);
+                }
+                timerPoll.Start();
             }
             catch (Exception ex)
             {
-                _activeDevice.IsConnected = false;
+                _isConnected = false; 
+                AddLog("Connection Error: Target device is offline or unreachable.");
+            }
+        }
+
+        private async void TimerPoll_Tick(object? sender, EventArgs e)
+        {
+            if (_master == null || !_isConnected) return;
+            if (!byte.TryParse(txtSlaveId.Text, out byte slaveId))
+            {
+                AddLog("Error: Invalid or empty Slave ID! Connection closed.");
+                timerPoll.Stop();
+                _transport?.Disconnect();
+                _isConnected = false;
                 btnConnect.Content = "Connect";
-                AddLog($"{_activeDevice.Name}: Connection Error - device offline or unreachable.");
+                return;
             }
-        }
 
-        // --- HER CİHAZ İÇİN ARKA PLAN POLL DÖNGÜSÜ ---
-        private void StartDevicePolling(SlaveDevice device)
-        {
-            StopDevicePolling(device); // varsa eskisini iptal et
-
-            var cts = new CancellationTokenSource();
-            device.PollCts = cts;
-
-            if (!int.TryParse(device.PollInterval, out int interval) || interval <= 0)
-                interval = 1000;
-
-            _ = DevicePollingLoop(device, interval, cts.Token);
-        }
-
-        private void StopDevicePolling(SlaveDevice device)
-        {
-            device.PollCts?.Cancel();
-            device.PollCts = null;
-        }
-
-        private async Task DevicePollingLoop(SlaveDevice device, int intervalMs, CancellationToken token)
-        {
-            while (!token.IsCancellationRequested)
+            if (!ushort.TryParse(txtStartAddress.Text, out ushort startAddress))
             {
-                try
+                AddLog("Error: Invalid or empty Start Address! Connection closed.");
+                timerPoll.Stop();
+                _transport?.Disconnect();
+                _isConnected = false;
+                btnConnect.Content = "Connect";
+                return;
+            }
+
+            if (!ushort.TryParse(txtQuantity.Text, out ushort quantity) || quantity <= 0)
+            {
+                AddLog("Error: Quantity must be a valid number greater than 0! Connection closed.");
+                timerPoll.Stop();
+                _transport?.Disconnect();
+                _isConnected = false;
+                btnConnect.Content = "Connect";
+                return;
+            }
+
+            try
+            {
+                int funcIndex = cmbFunction.SelectedIndex;
+
+                if (funcIndex == 0 || funcIndex == 1)
                 {
-                    await PollDeviceOnce(device);
-                }
-                catch (Exception)
-                {
-                    if (device.IsConnected)
+                    ushort maxCoilRead = 2000;
+                    bool[] allBitValues = new bool[quantity];
+                    ushort remaining = quantity;
+                    ushort currentStart = startAddress;
+                    int destIndex = 0;
+
+                    while (remaining > 0)
                     {
-                        AddLog($"{device.Name}: Reading Error - Connection lost.");
-                        device.Transport?.Disconnect();
-                        device.IsConnected = false;
+                        ushort readCount = remaining > maxCoilRead ? maxCoilRead : remaining;
+                        bool[] chunk = funcIndex == 0
+                            ? await _master.ReadCoilsAsync(slaveId, currentStart, readCount)
+                            : await _master.ReadDiscreteInputsAsync(slaveId, currentStart, readCount);
 
-                        if (_activeDevice == device)
-                        {
-                            Dispatcher.UIThread.Post(() => btnConnect.Content = "Connect");
-                        }
+                        Array.Copy(chunk, 0, allBitValues, destIndex, chunk.Length);
+                        remaining -= readCount;
+                        currentStart += readCount;
+                        destIndex += readCount;
                     }
-                    break; // bu cihazın döngüsünü sonlandır
+
+                    UpdateGrid(startAddress, quantity, 1, funcIndex, allBitValues, null, "");
                 }
-
-                try { await Task.Delay(intervalMs, token); }
-                catch (TaskCanceledException) { break; }
-            }
-        }
-
-        // Tek bir okuma turu — sadece device'ın kendi ayarlarına bakar, ekrandaki textbox'lara BAKMAZ
-        private async Task PollDeviceOnce(SlaveDevice device)
-        {
-            if (device.Master == null || !device.IsConnected) return;
-
-            if (!byte.TryParse(device.SlaveId.ToString(), out byte slaveId)) return;
-            if (!ushort.TryParse(device.StartAddress, out ushort startAddress)) return;
-            if (!ushort.TryParse(device.Quantity, out ushort quantity) || quantity == 0) return;
-
-            var master = device.Master;
-            int funcIndex = device.SelectedFunctionIndex;
-
-            if (funcIndex == 0 || funcIndex == 1)
-            {
-                ushort maxCoilRead = 2000;
-                bool[] allBitValues = new bool[quantity];
-                ushort remaining = quantity, currentStart = startAddress;
-                int destIndex = 0;
-
-                while (remaining > 0)
+                else
                 {
-                    ushort readCount = remaining > maxCoilRead ? maxCoilRead : remaining;
-                    bool[] chunk = funcIndex == 0
-                        ? await master.ReadCoilsAsync(slaveId, currentStart, readCount)
-                        : await master.ReadDiscreteInputsAsync(slaveId, currentStart, readCount);
+                    ushort maxRegRead = 125;
+                    ushort[] allValues = new ushort[quantity];
+                    ushort remaining = quantity;
+                    ushort currentStart = startAddress;
+                    int destIndex = 0;
 
-                    Array.Copy(chunk, 0, allBitValues, destIndex, chunk.Length);
-                    remaining -= readCount; currentStart += readCount; destIndex += readCount;
-                }
-
-                UpdateDeviceGrid(device, startAddress, quantity, 1, funcIndex, allBitValues, null, "");
-            }
-            else
-            {
-                ushort maxRegRead = 125;
-                ushort[] allValues = new ushort[quantity];
-                ushort remaining = quantity, currentStart = startAddress;
-                int destIndex = 0;
-
-                string selectedType = DataTypeNames.ElementAtOrDefault(device.SelectedDataTypeIndex) ?? "Unsigned";
-
-                while (remaining > 0)
-                {
-                    ushort readCount = remaining > maxRegRead ? maxRegRead : remaining;
-                    ushort[] chunk = funcIndex == 2
-                        ? await master.ReadHoldingRegistersAsync(slaveId, currentStart, readCount)
-                        : await master.ReadInputRegistersAsync(slaveId, currentStart, readCount);
-
-                    Array.Copy(chunk, 0, allValues, destIndex, chunk.Length);
-                    remaining -= readCount; currentStart += readCount; destIndex += readCount;
-                }
-
-                int step = ModbusLibrary.Utils.ModbusDataFormatter.GetStepForDataType(selectedType);
-                int expectedRows = step > 0 ? quantity / step : quantity;
-
-                UpdateDeviceGrid(device, startAddress, expectedRows, step, funcIndex, null, allValues, selectedType);
-            }
-        }
-
-        // Cihazın kendi RegisterData'sını günceller — UI thread'e Dispatcher ile geçiyoruz
-        private void UpdateDeviceGrid(SlaveDevice device, int startAddress, int rowCount, int step, int funcIndex, bool[]? bitValues, ushort[]? regValues, string selectedType)
-        {
-            string prefix = FunctionNames.ElementAtOrDefault(funcIndex) ?? "Address";
-
-            Dispatcher.UIThread.Post(() =>
-            {
-                if (device.RegisterData.Count != rowCount)
-                {
-                    device.RegisterData.Clear();
-                    for (int i = 0; i < rowCount; i++)
+                    while (remaining > 0)
                     {
-                        device.RegisterData.Add(new RegisterRow
-                        {
-                            Address = $"{prefix}[{startAddress + (i * step)}]",
-                            Value = "0",
-                            RawAddress = startAddress + (i * step)
-                        });
-                    }
-                }
+                        ushort readCount = remaining > maxRegRead ? maxRegRead : remaining;
+                        ushort[] chunk = funcIndex == 2
+                            ? await _master.ReadHoldingRegistersAsync(slaveId, currentStart, readCount)
+                            : await _master.ReadInputRegistersAsync(slaveId, currentStart, readCount);
 
+                        Array.Copy(chunk, 0, allValues, destIndex, chunk.Length);
+                        remaining -= readCount;
+                        currentStart += readCount;
+                        destIndex += readCount;
+                    }
+
+                    string selectedType = (cmbDataType.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? "Unsigned";
+                    int step = ModbusLibrary.Utils.ModbusDataFormatter.GetStepForDataType(selectedType);
+                    int expectedRows = quantity / step;
+
+                    UpdateGrid(startAddress, expectedRows, step, funcIndex, null, allValues, selectedType);
+                }
+            }
+            catch (Exception ex)
+            {
+                if (_isConnected)
+                {
+                    AddLog("Reading Error: Connection lost. Device went offline.");
+                    _transport?.Disconnect();
+                    _isConnected = false;
+                    
+                }
+            }
+        }
+
+        private void UpdateGrid(int startAddress, int rowCount, int step, int funcIndex, bool[]? bitValues, ushort[]? regValues, string selectedType)
+        {
+            string prefix = funcIndex switch
+            {
+                0 => "Coil",
+                1 => "Input",
+                2 => "Register",
+                3 => "InpReg",
+                _ => "Address"
+            };
+            if (RegisterData.Count != rowCount)
+            {
+                RegisterData.Clear();
                 for (int i = 0; i < rowCount; i++)
                 {
-                    if (bitValues != null)
-                        device.RegisterData[i].Value = bitValues[i] ? "1" : "0";
-                    else if (regValues != null)
-                        device.RegisterData[i].Value = ModbusLibrary.Utils.ModbusDataFormatter.FormatValue(regValues, i * step, selectedType);
-                }
-            });
-        }
+                    RegisterData.Add(new RegisterRow
+                    {
+                        Address = $"{prefix}[{startAddress + (i * step)}]",
+                        Value = "0",
 
-        // --- TEXTBOX FİLTRELERİ (değişmedi) ---
+                        RawAddress = startAddress + (i * step)
+                    });
+                }
+            }
+
+            for (int i = 0; i < rowCount; i++)
+            {
+                if (bitValues != null)
+                {
+                    RegisterData[i].Value = bitValues[i] ? "1" : "0";
+                }
+                else if (regValues != null)
+                {
+                    RegisterData[i].Value = ModbusLibrary.Utils.ModbusDataFormatter.FormatValue(regValues, i * step, selectedType);
+                }
+            }
+        }
+        // FILTER THAT ALLOWS ONLY NUMBERS
         private void NumericTextBox_TextChanged(object? sender, TextChangedEventArgs e)
         {
             if (sender is TextBox textBox && !string.IsNullOrEmpty(textBox.Text))
             {
+                // Filter only digit characters (0-9)
                 string originalText = textBox.Text;
                 string newText = new string(originalText.Where(char.IsDigit).ToArray());
+
+                // If a letter is deleted, update the text and move the cursor to the end.
                 if (originalText != newText)
                 {
                     textBox.Text = newText;
@@ -271,73 +286,97 @@ namespace ModbusTestAvalonia
             }
         }
 
+        // Filter allowing letters, numbers, and dots for IP and COM ports.
         private void IpTextBox_TextChanged(object? sender, TextChangedEventArgs e)
         {
             if (sender is TextBox textBox && !string.IsNullOrEmpty(textBox.Text))
             {
                 string originalText = textBox.Text;
                 string newText = originalText;
+
+                // Get the currently selected connection type
                 string? selectedConnection = (cmbConnectionType.SelectedItem as ComboBoxItem)?.Content?.ToString();
 
-                newText = selectedConnection == "Serial Port (RTU)"
-                    ? new string(originalText.Where(char.IsLetterOrDigit).ToArray())
-                    : new string(originalText.Where(c => char.IsDigit(c) || c == '.').ToArray());
+                if (selectedConnection == "Serial Port (RTU)")
+                {
+                    // IF SERIAL PORT IS SELECTED: Allow only letters and numbers (e.g., COM3, ttyS0)
+                    newText = new string(originalText.Where(char.IsLetterOrDigit).ToArray());
+                }
+                else
+                {
+                    // IF TCP/UDP IS SELECTED: Allow only numbers and periods (e.g., 127.0.0.1)
+                    newText = new string(originalText.Where(c => char.IsDigit(c) || c == '.').ToArray());
+                }
 
                 if (originalText != newText)
                 {
                     textBox.Text = newText;
-                    textBox.CaretIndex = newText.Length;
+                    textBox.CaretIndex = newText.Length; // Move cursor to the end
                 }
             }
         }
-
+        //Dynamic filter for Write Value Box
         private void WriteValueTextBox_TextChanged(object? sender, TextChangedEventArgs e)
         {
             if (sender is TextBox textBox && !string.IsNullOrEmpty(textBox.Text))
             {
                 string originalText = textBox.Text;
                 string newText = originalText;
+
+                // Find out which Data Type is currently selected
                 string selectedType = (cmbDataType.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? "Unsigned";
 
                 if (selectedType == "Hex")
                 {
+                    // HEX: Numbers only, letters A-F and 'x'
                     newText = new string(originalText.Where(c => char.IsDigit(c) || "abcdefABCDEFxX".Contains(c)).ToArray());
+
+                    // LENGTH LIMIT: Maximum 6 characters if starting with "0x" (0xFFFF), 4 characters if not starting with "0x" (FFFF)
                     int maxLen = newText.StartsWith("0x", StringComparison.OrdinalIgnoreCase) ? 6 : 4;
                     if (newText.Length > maxLen) newText = newText.Substring(0, maxLen);
                 }
                 else if (selectedType == "Binary")
                 {
+                    // BINARY: Only 0 and 1
                     newText = new string(originalText.Where(c => c == '0' || c == '1').ToArray());
+
+                    // LENGTH LIMIT: Maximum 16 characters because it's 16-bit (1111111111111111)
                     if (newText.Length > 16) newText = newText.Substring(0, 16);
                 }
                 else if (selectedType.Contains("Float") || selectedType.Contains("Double") || selectedType.Contains("Signed"))
                 {
+                    // FLOAT / SIGNED: Numbers, Minus (-) and Period/Comma (.,)
                     newText = new string(originalText.Where(c => char.IsDigit(c) || c == '-' || c == '.' || c == ',').ToArray());
                 }
                 else
                 {
+                    // UNSIGNED: Numbers only
                     newText = new string(originalText.Where(char.IsDigit).ToArray());
+
+                    // LENGTH LIMIT: Unsigned ushort can be a maximum of 65535 (5 characters)
                     if (newText.Length > 5) newText = newText.Substring(0, 5);
                 }
 
+                // Update the box if there are forbidden characters in the text entered by the user and they have been deleted.
                 if (originalText != newText)
                 {
                     textBox.Text = newText;
-                    textBox.CaretIndex = newText.Length;
+                    textBox.CaretIndex = newText.Length; // Move the cursor to the end
                 }
             }
         }
 
-        // --- YAZMA (aktif cihaz üzerinden, senkron - polling'i etkilemez çünkü artık ayrı Task) ---
+        // --- DATA WRITING OPERATION ---
         private async void BtnWrite_Click(object sender, RoutedEventArgs e)
         {
-            if (_activeDevice?.Master == null || !_activeDevice.IsConnected)
+            if (_master == null || !_isConnected)
             {
                 AddLog("Warning: You must connect to a device first!");
                 return;
             }
 
             int funcIndex = cmbFunction.SelectedIndex;
+
             if (funcIndex == 1 || funcIndex == 3)
             {
                 AddLog("Error: The selected function is Read-Only. Data cannot be written.");
@@ -350,28 +389,29 @@ namespace ModbusTestAvalonia
                 return;
             }
 
-            var device = _activeDevice;
-            var master = device.Master;
+            bool wasPolling = timerPoll.IsEnabled;
+            timerPoll.Stop();
 
             try
             {
                 byte slaveId = byte.Parse(txtSlaveId.Text ?? "1");
 
-                if (funcIndex == 0)
+                if (funcIndex == 0) // Write Coil (01)
                 {
                     string valueText = txtWriteValue.Text?.Trim().ToLower() ?? "0";
                     bool valueToWrite = valueText == "1" || valueText == "true";
-                    await master.WriteSingleCoilAsync(slaveId, address, valueToWrite);
+                    await _master.WriteSingleCoilAsync(slaveId, address, valueToWrite);
                     AddLog($"Success: {valueToWrite} was written to Coil[{address}].");
                 }
-                else if (funcIndex == 2)
+                else if (funcIndex == 2) // Write Register (03)
                 {
                     string selectedType = (cmbDataType.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? "Unsigned";
 
                     if (selectedType is "Signed" or "Unsigned" or "Hex" or "Binary")
                     {
                         ushort valueToWrite = ModbusLibrary.Utils.ModbusDataFormatter.ParseRegisterValue(txtWriteValue.Text ?? "0", selectedType);
-                        await master.WriteSingleRegisterAsync(slaveId, address, valueToWrite);
+                        await _master.WriteSingleRegisterAsync(slaveId, address, valueToWrite);
+
 
                         string formattedLogValue = ModbusLibrary.Utils.ModbusDataFormatter.FormatValue(new ushort[] { valueToWrite }, 0, selectedType);
                         AddLog($"Success: {formattedLogValue} was written to Register[{address}].");
@@ -379,7 +419,7 @@ namespace ModbusTestAvalonia
                     else
                     {
                         ushort[] registersToWrite = ModbusLibrary.Utils.ModbusDataFormatter.BuildMultiRegisterValue(txtWriteValue.Text ?? "0", selectedType);
-                        await master.WriteMultipleRegistersAsync(slaveId, address, registersToWrite);
+                        await _master.WriteMultipleRegistersAsync(slaveId, address, registersToWrite);
                         AddLog($"Success: {txtWriteValue.Text} ({selectedType}) was written to Register[{address}].");
                     }
                 }
@@ -387,17 +427,14 @@ namespace ModbusTestAvalonia
             catch (Exception ex)
             {
                 AddLog("Writing Error: Failed to write data. The device might be disconnected or the address is invalid.");
-                if (device.IsConnected)
-                {
-                    StopDevicePolling(device);
-                    device.Transport?.Disconnect();
-                    device.IsConnected = false;
-                    if (_activeDevice == device) btnConnect.Content = "Connect";
-                }
+            }
+            finally
+            {
+                if (wasPolling) timerPoll.Start();
             }
         }
 
-        // --- CİHAZ YÖNETİMİ ---
+        // --- DEVICE MANAGEMENT ---
         private void BtnAddDevice_Click(object sender, RoutedEventArgs e)
         {
             if (byte.TryParse(txtNewDevId.Text, out byte id) && !string.IsNullOrWhiteSpace(txtNewDevName.Text))
@@ -412,8 +449,7 @@ namespace ModbusTestAvalonia
                     SelectedFunctionIndex = cmbFunction.SelectedIndex,
                     SelectedDataTypeIndex = cmbDataType.SelectedIndex,
                     StartAddress = txtStartAddress.Text ?? "0",
-                    Quantity = txtQuantity.Text ?? "10",
-                    PollInterval = txtPollInterval.Text ?? "1000"
+                    Quantity = txtQuantity.Text ?? "10"
                 };
                 DeviceList.Add(newDev);
                 AddLog($"New device added: {newDev.Name} (ID: {id})");
@@ -430,57 +466,43 @@ namespace ModbusTestAvalonia
         {
             if (lstDevices.SelectedItem is SlaveDevice dev)
             {
-                StopDevicePolling(dev);
-                if (dev.IsConnected)
-                {
-                    dev.Transport?.Disconnect();
-                    dev.IsConnected = false;
-                }
-
                 DeviceList.Remove(dev);
                 AddLog($"Device deleted: {dev.Name}");
-
-                if (_activeDevice == dev)
-                {
-                    _activeDevice = null;
-                    dataGridViewRegisters.ItemsSource = null;
-                    btnConnect.Content = "Connect";
-                }
             }
-        }
-
-        // Ekrandaki (textbox/combobox) değerleri, cihazın kendi ayarlarına yazar
-        private void SyncScreenToDevice(SlaveDevice device)
-        {
-            if (byte.TryParse(txtSlaveId.Text, out byte id)) device.SlaveId = id;
-            device.IpAddress = txtIpAddress.Text ?? "";
-            device.Port = txtPort.Text ?? "";
-            device.SelectedConnectionIndex = cmbConnectionType.SelectedIndex;
-            device.SelectedFunctionIndex = cmbFunction.SelectedIndex;
-            device.SelectedDataTypeIndex = cmbDataType.SelectedIndex;
-            device.StartAddress = txtStartAddress.Text ?? "0";
-            device.Quantity = txtQuantity.Text ?? "10";
-            device.PollInterval = txtPollInterval.Text ?? "1000";
         }
 
         private void LstDevices_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
-            // Eski cihazın form alanlarını kaydet (bağlantı/polling'e DOKUNMUYORUZ, arka planda devam etsin)
+            // 1. SAVE THE DATA OF THE OLD DEVICE
             if (e.RemovedItems.Count > 0 && e.RemovedItems[0] is SlaveDevice oldDevice)
             {
-                SyncScreenToDevice(oldDevice);
-
-                // Eğer poll interval değiştiyse ve cihaz bağlıysa, çalışan görevi yeni interval ile yeniden başlat
-                if (oldDevice.IsConnected)
-                {
-                    StartDevicePolling(oldDevice); // interval güncellemesi için restart (opsiyonel ama güvenli)
-                }
+                if (byte.TryParse(txtSlaveId.Text, out byte oldId)) oldDevice.SlaveId = oldId;
+                oldDevice.IpAddress = txtIpAddress.Text ?? "";
+                oldDevice.Port = txtPort.Text ?? "";
+                oldDevice.SelectedConnectionIndex = cmbConnectionType.SelectedIndex;
+                oldDevice.SelectedFunctionIndex = cmbFunction.SelectedIndex;
+                oldDevice.SelectedDataTypeIndex = cmbDataType.SelectedIndex;
+                oldDevice.StartAddress = txtStartAddress.Text ?? "0";
+                oldDevice.Quantity = txtQuantity.Text ?? "10";
+                oldDevice.PollInterval = txtPollInterval.Text ?? "1000";
             }
 
+            // 2. SWITCHING TO A NEW DEVICE AND INSTALLING THE INTERFACE
             if (lstDevices.SelectedItem is SlaveDevice selectedDevice)
             {
-                _activeDevice = selectedDevice;
+                // CRITICAL: We are memorizing whether the user is currently connected to the system.
+                bool wasSystemActive = _isSystemActive;
 
+                // If we were previously connected, silently clear the old physical connection in the background.
+                if (_isConnected)
+                {
+                    timerPoll.Stop();
+                    _transport?.Disconnect();
+                    _isConnected = false;
+                    // ATTENTION: We are not setting the button to "Connect" because we will connect automatically shortly!
+                }
+
+                // Fill in the values ​​of the new device in the boxes on the screen.
                 cmbConnectionType.SelectedIndex = selectedDevice.SelectedConnectionIndex;
                 txtIpAddress.Text = selectedDevice.IpAddress;
                 txtPort.Text = selectedDevice.Port;
@@ -491,42 +513,41 @@ namespace ModbusTestAvalonia
                 txtQuantity.Text = selectedDevice.Quantity;
                 txtPollInterval.Text = selectedDevice.PollInterval;
 
-                // Grid'i bu cihazın KENDİ verisine bağla — ayrı Clear/doldurma yok, veri zaten arka planda birikiyor
-                dataGridViewRegisters.ItemsSource = selectedDevice.RegisterData;
+                AddLog($"Device changed: {selectedDevice.Name}");
 
-                if (selectedDevice.IsConnected && selectedDevice.Transport != null)
+                // 3. AUTOMATIC RECONNECT (Auto-Reconnect)
+                if (wasSystemActive)
                 {
-                    btnConnect.Content = "Disconnect";
-                    AddLog($"Switched to {selectedDevice.Name} (already connected, background polling continues).");
-                }
-                else
-                {
-                    btnConnect.Content = "Connect";
-                    AddLog($"Switched to {selectedDevice.Name}, connecting...");
+                    AddLog($"Auto-connecting to {selectedDevice.Name}...");
+                    btnConnect.Content = "Connect"; // Deception: We reset the button so the system can establish a new bridge.
                     BtnConnect_Click(this, new RoutedEventArgs());
                 }
             }
         }
-
         private async void DataGridViewRegisters_DoubleTapped(object? sender, Avalonia.Input.TappedEventArgs e)
         {
             if (dataGridViewRegisters.SelectedItem is RegisterRow selectedRow)
             {
-                if (_activeDevice?.Master == null || !_activeDevice.IsConnected) return;
-                var device = _activeDevice;
-                var master = device.Master;
+                if (_master == null || !_isConnected) return;
 
                 int funcIndex = cmbFunction.SelectedIndex;
+
+                // Prevent windows from opening in Read-Only fields (02, 04)
                 if (funcIndex == 1 || funcIndex == 3)
                 {
                     AddLog("Warning: The selected function is Read-Only.");
                     return;
                 }
 
+                // We call up the pop-up window we just created
                 string selectedType = (cmbDataType.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? "Unsigned";
+
                 var dialog = new EditRegisterWindow(selectedRow.Value, selectedType);
+
+                // Open the window as a "Dialog" (The user cannot click on the backend without closing this window)
                 await dialog.ShowDialog(this);
 
+                // If the user clicks the OK button (IsConfirmed = true), proceed with the writing process.
                 if (dialog.IsConfirmed)
                 {
                     try
@@ -534,26 +555,29 @@ namespace ModbusTestAvalonia
                         byte slaveId = byte.Parse(txtSlaveId.Text ?? "1");
                         ushort address = (ushort)selectedRow.RawAddress;
 
-                        if (funcIndex == 0)
+                        if (funcIndex == 0) // Write Coil
                         {
                             bool valueToWrite = dialog.InputValue.Trim().ToLower() is "1" or "true";
-                            await master.WriteSingleCoilAsync(slaveId, address, valueToWrite);
+                            await _master.WriteSingleCoilAsync(slaveId, address, valueToWrite);
                             AddLog($"Success: {valueToWrite} written to Coil[{address}].");
                         }
-                        else if (funcIndex == 2)
+                        else if (funcIndex == 2) // Write Register
                         {
+                            //string selectedType = (cmbDataType.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? "Unsigned";
+
                             if (selectedType is "Signed" or "Unsigned" or "Hex" or "Binary")
                             {
                                 ushort valueToWrite = ModbusLibrary.Utils.ModbusDataFormatter.ParseRegisterValue(dialog.InputValue, selectedType);
-                                await master.WriteSingleRegisterAsync(slaveId, address, valueToWrite);
+                                await _master.WriteSingleRegisterAsync(slaveId, address, valueToWrite);
 
+                                // NEW LOG LOGING: Reformats the entered value according to its current type (e.g., if it's Hex, it becomes 0xAAAA) before printing it to the log.
                                 string formattedLogValue = ModbusLibrary.Utils.ModbusDataFormatter.FormatValue(new ushort[] { valueToWrite }, 0, selectedType);
                                 AddLog($"Success: {formattedLogValue} written to Register[{address}].");
                             }
-                            else
+                            else // Float, Double etc.
                             {
                                 ushort[] registersToWrite = ModbusLibrary.Utils.ModbusDataFormatter.BuildMultiRegisterValue(dialog.InputValue, selectedType);
-                                await master.WriteMultipleRegistersAsync(slaveId, address, registersToWrite);
+                                await _master.WriteMultipleRegistersAsync(slaveId, address, registersToWrite);
                                 AddLog($"Success: {dialog.InputValue} ({selectedType}) written to Register[{address}].");
                             }
                         }
@@ -561,44 +585,46 @@ namespace ModbusTestAvalonia
                     catch (Exception ex)
                     {
                         AddLog($"Writing Error: Failed to write data to Address [{selectedRow.RawAddress}].");
-                        if (device.IsConnected)
-                        {
-                            StopDevicePolling(device);
-                            device.Transport?.Disconnect();
-                            device.IsConnected = false;
-                            if (_activeDevice == device) btnConnect.Content = "Connect";
-                        }
                     }
                 }
             }
         }
 
+        // --- COLOR LOG ALGORITHM ---
         private void AddLog(string message)
         {
             string finalMessage = $"[{DateTime.Now:HH:mm:ss}] {message}";
-            string color = "Lime";
+            string color = "Lime"; // Default Green
 
-            if (message.Contains("Error", StringComparison.OrdinalIgnoreCase)) color = "Red";
-            else if (message.Contains("Warning", StringComparison.OrdinalIgnoreCase)) color = "Yellow";
+            // Color assignment based on message content
+            if (message.Contains("Error", StringComparison.OrdinalIgnoreCase))
+            {
+                color = "Red";
+            }
+            else if (message.Contains("Warning", StringComparison.OrdinalIgnoreCase))
+            {
+                color = "Yellow";
+            }
 
+            // We're adding it via Dispatcher so the interface doesn't freeze.
             Dispatcher.UIThread.InvokeAsync(() =>
             {
                 LogData.Add(new LogEntry { Message = finalMessage, Color = color });
             });
         }
-
         private void CmbConnectionType_SelectionChanged(object? sender, SelectionChangedEventArgs e)
         {
             if (lblIpAddress == null || lblPort == null || txtIpAddress == null || txtPort == null || cmbConnectionType == null) return;
 
-            if (_activeDevice != null && _activeDevice.IsConnected)
+
+            if (_isConnected)
             {
-                StopDevicePolling(_activeDevice);
-                _activeDevice.Transport?.Disconnect();
-                _activeDevice.IsConnected = false;
+                timerPoll.Stop();
+                _transport?.Disconnect();
+                _isConnected = false;
 
                 btnConnect.Content = "Connect";
-                AddLog("Connection type changed, previous connection closed.");
+                AddLog("Warning: Connection type changed, previous connection closed.");
             }
 
             string? selectedConnection = (cmbConnectionType.SelectedItem as ComboBoxItem)?.Content?.ToString();
@@ -626,15 +652,26 @@ namespace ModbusTestAvalonia
         private string _address = string.Empty;
         private string _value = string.Empty;
 
-        public string Address { get => _address; set { _address = value; OnPropertyChanged(); } }
-        public string Value { get => _value; set { _value = value; OnPropertyChanged(); } }
+        public string Address
+        {
+            get => _address;
+            set { _address = value; OnPropertyChanged(); }
+        }
+
+        public string Value
+        {
+            get => _value;
+            set { _value = value; OnPropertyChanged(); }
+        }
 
         public event PropertyChangedEventHandler? PropertyChanged;
         protected void OnPropertyChanged([CallerMemberName] string? propertyName = null)
-            => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+        {
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+        }
     }
 
-    public class SlaveDevice : INotifyPropertyChanged
+    public class SlaveDevice
     {
         public string Name { get; set; } = string.Empty;
         public byte SlaveId { get; set; }
@@ -646,41 +683,15 @@ namespace ModbusTestAvalonia
         public string StartAddress { get; set; } = "0";
         public string Quantity { get; set; } = "10";
         public string PollInterval { get; set; } = "1000";
-
-        [JsonIgnore] public ITransport? Transport { get; set; }
-        [JsonIgnore] public ModbusMaster? Master { get; set; }
-        [JsonIgnore] public CancellationTokenSource? PollCts { get; set; }
-
-        // Her cihazın kendi register grid verisi — grid buna bağlanır
-        [JsonIgnore] public ObservableCollection<RegisterRow> RegisterData { get; } = new();
-
-        private bool _isConnected = false;
-        [JsonIgnore]
-        public bool IsConnected
-        {
-            get => _isConnected;
-            set
-            {
-                if (_isConnected != value)
-                {
-                    _isConnected = value;
-                    OnPropertyChanged();
-                    OnPropertyChanged(nameof(StatusColor));
-                }
-            }
-        }
-
-        [JsonIgnore]
-        public string StatusColor => IsConnected ? "LimeGreen" : "Red";
-
-        public event PropertyChangedEventHandler? PropertyChanged;
-        protected void OnPropertyChanged([CallerMemberName] string? propertyName = null)
-            => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
     }
 
+
+    // Data model for color logging
     public class LogEntry
     {
         public string Message { get; set; } = string.Empty;
         public string Color { get; set; } = "Lime";
     }
+
+
 }
