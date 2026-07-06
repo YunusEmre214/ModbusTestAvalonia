@@ -65,7 +65,7 @@ namespace ModbusTestAvalonia
                     !ushort.TryParse(txtQuantity.Text, out ushort q) || q <= 0)
                 {
                     AddLog("Warning: Please fix the Slave ID, Start Address, or Quantity fields before connecting.");
-                    return; // Bağlantı işlemini başlatmadan iptal et
+                    return; 
                 }
                 try
                 {
@@ -161,9 +161,7 @@ namespace ModbusTestAvalonia
 
             try
             {
-                //if (!byte.TryParse(txtSlaveId.Text, out byte slaveId)) return;
-                //if (!ushort.TryParse(txtStartAddress.Text, out ushort startAddress)) return;
-                //if (!ushort.TryParse(txtQuantity.Text, out ushort quantity) || quantity <= 0) return;
+                
 
                 int funcIndex = cmbFunction.SelectedIndex;
 
@@ -237,13 +235,18 @@ namespace ModbusTestAvalonia
                 3 => "InpReg",
                 _ => "Address"
             };
-
             if (RegisterData.Count != rowCount)
             {
                 RegisterData.Clear();
                 for (int i = 0; i < rowCount; i++)
                 {
-                    RegisterData.Add(new RegisterRow { Address = $"{prefix}[{startAddress + (i * step)}]", Value = "0" });
+                    RegisterData.Add(new RegisterRow
+                    {
+                        Address = $"{prefix}[{startAddress + (i * step)}]",
+                        Value = "0",
+                        
+                        RawAddress = startAddress + (i * step)
+                    });
                 }
             }
 
@@ -403,6 +406,66 @@ namespace ModbusTestAvalonia
                 AddLog($"Device changed: {selectedDevice.Name}");
             }
         }
+        private async void DataGridViewRegisters_DoubleTapped(object? sender, Avalonia.Input.TappedEventArgs e)
+        {
+            if (dataGridViewRegisters.SelectedItem is RegisterRow selectedRow)
+            {
+                if (_master == null || !_isConnected) return;
+
+                int funcIndex = cmbFunction.SelectedIndex;
+
+                // Prevent windows from opening in Read-Only fields (02, 04)
+                if (funcIndex == 1 || funcIndex == 3)
+                {
+                    AddLog("Warning: The selected function is Read-Only.");
+                    return;
+                }
+
+                // We call up the pop-up window we just created
+                var dialog = new EditRegisterWindow(selectedRow.Value);
+
+                // Open the window as a "Dialog" (The user cannot click on the backend without closing this window)
+                await dialog.ShowDialog(this);
+
+                // If the user clicks the OK button (IsConfirmed = true), proceed with the writing process.
+                if (dialog.IsConfirmed)
+                {
+                    try
+                    {
+                        byte slaveId = byte.Parse(txtSlaveId.Text ?? "1");
+                        ushort address = (ushort)selectedRow.RawAddress;
+
+                        if (funcIndex == 0) // Write Coil
+                        {
+                            bool valueToWrite = dialog.InputValue.Trim().ToLower() is "1" or "true";
+                            await _master.WriteSingleCoilAsync(slaveId, address, valueToWrite);
+                            AddLog($"Success: {valueToWrite} written to Coil[{address}].");
+                        }
+                        else if (funcIndex == 2) // Write Register
+                        {
+                            string selectedType = (cmbDataType.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? "Unsigned";
+
+                            if (selectedType is "Signed" or "Unsigned" or "Hex" or "Binary")
+                            {
+                                ushort valueToWrite = ModbusLibrary.Utils.ModbusDataFormatter.ParseRegisterValue(dialog.InputValue, selectedType);
+                                await _master.WriteSingleRegisterAsync(slaveId, address, valueToWrite);
+                                AddLog($"Success: {valueToWrite} written to Register[{address}].");
+                            }
+                            else // For 32/64 bit values ​​such as Float, Double, Long, etc.
+                            {
+                                ushort[] registersToWrite = ModbusLibrary.Utils.ModbusDataFormatter.BuildMultiRegisterValue(dialog.InputValue, selectedType);
+                                await _master.WriteMultipleRegistersAsync(slaveId, address, registersToWrite);
+                                AddLog($"Success: Data ({selectedType}) written to Register[{address}].");
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        AddLog($"Writing Error: Failed to write data to Address [{selectedRow.RawAddress}].");
+                    }
+                }
+            }
+        }
 
         // --- COLOR LOG ALGORITHM ---
         private void AddLog(string message)
@@ -462,6 +525,7 @@ namespace ModbusTestAvalonia
 
     public class RegisterRow : INotifyPropertyChanged
     {
+        public int RawAddress { get; set; }
         private string _address = string.Empty;
         private string _value = string.Empty;
 
@@ -505,5 +569,6 @@ namespace ModbusTestAvalonia
         public string Message { get; set; } = string.Empty;
         public string Color { get; set; } = "Lime";
     }
+
     
 }

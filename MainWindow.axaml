@@ -70,10 +70,11 @@
 				<Button Name="btnWrite" Content="Write" Click="BtnWrite_Click" Width="80" HorizontalContentAlignment="Center"/>
 			</StackPanel>
 
-			<DataGrid Name="dataGridViewRegisters" x:CompileBindings="False" Grid.Row="3" AutoGenerateColumns="False" Margin="0,0,0,15" BorderBrush="Gray" BorderThickness="1">
+			<DataGrid Name="dataGridViewRegisters" x:CompileBindings="False" Grid.Row="3" AutoGenerateColumns="False" Margin="0,0,0,15" BorderBrush="Gray" BorderThickness="1"
+          DoubleTapped="DataGridViewRegisters_DoubleTapped">
 				<DataGrid.Columns>
 					<DataGridTextColumn Header="Address" Binding="{Binding Address}" IsReadOnly="True" Width="150"/>
-					<DataGridTextColumn Header="Value" Binding="{Binding Value}" Width="*"/>
+					<DataGridTextColumn Header="Value" Binding="{Binding Value}" IsReadOnly="True" Width="*"/>
 				</DataGrid.Columns>
 			</DataGrid>
 

@@ -1,0 +1,19 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="ModbusTestAvalonia.EditRegisterWindow"
+        Title="Edit Register" Width="280" Height="140"
+        WindowStartupLocation="CenterOwner" CanResize="False">
+	<Grid Margin="15" RowDefinitions="Auto, *">
+
+		<StackPanel Grid.Row="0" Orientation="Horizontal" Spacing="15" VerticalAlignment="Center">
+			<TextBlock Text="Value:" VerticalAlignment="Center" FontWeight="SemiBold"/>
+			<TextBox Name="txtValue" Width="120"/>
+		</StackPanel>
+
+		<StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="10" HorizontalAlignment="Right" VerticalAlignment="Bottom">
+			<Button Name="btnOk" Content="OK" Width="70" HorizontalContentAlignment="Center" Click="BtnOk_Click"/>
+			<Button Name="btnCancel" Content="Cancel" Width="70" HorizontalContentAlignment="Center" Click="BtnCancel_Click"/>
+		</StackPanel>
+
+	</Grid>
+</Window>
