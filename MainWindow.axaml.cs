@@ -16,9 +16,6 @@ namespace ModbusTestAvalonia
         private ModbusMaster? _master;
         private ITransport? _transport;
         private bool _isConnected = false;
-        
-
-
 
         public ObservableCollection<RegisterRow> RegisterData { get; set; } = new ObservableCollection<RegisterRow>();
         public ObservableCollection<SlaveDevice> DeviceList { get; set; } = new ObservableCollection<SlaveDevice>();
@@ -161,8 +158,6 @@ namespace ModbusTestAvalonia
 
             try
             {
-                
-
                 int funcIndex = cmbFunction.SelectedIndex;
 
                 if (funcIndex == 0 || funcIndex == 1)
@@ -308,13 +303,16 @@ namespace ModbusTestAvalonia
                     {
                         ushort valueToWrite = ModbusLibrary.Utils.ModbusDataFormatter.ParseRegisterValue(txtWriteValue.Text ?? "0", selectedType);
                         await _master.WriteSingleRegisterAsync(slaveId, address, valueToWrite);
-                        AddLog($"Success: {valueToWrite} was written to Register[{address}].");
+
+                        
+                        string formattedLogValue = ModbusLibrary.Utils.ModbusDataFormatter.FormatValue(new ushort[] { valueToWrite }, 0, selectedType);
+                        AddLog($"Success: {formattedLogValue} was written to Register[{address}].");
                     }
                     else
                     {
                         ushort[] registersToWrite = ModbusLibrary.Utils.ModbusDataFormatter.BuildMultiRegisterValue(txtWriteValue.Text ?? "0", selectedType);
                         await _master.WriteMultipleRegistersAsync(slaveId, address, registersToWrite);
-                        AddLog($"Success: Data ({selectedType}) was written to Register[{address}].");
+                        AddLog($"Success: {txtWriteValue.Text} ({selectedType}) was written to Register[{address}].");
                     }
                 }
             }
@@ -449,13 +447,16 @@ namespace ModbusTestAvalonia
                             {
                                 ushort valueToWrite = ModbusLibrary.Utils.ModbusDataFormatter.ParseRegisterValue(dialog.InputValue, selectedType);
                                 await _master.WriteSingleRegisterAsync(slaveId, address, valueToWrite);
-                                AddLog($"Success: {valueToWrite} written to Register[{address}].");
+
+                                // NEW LOG LOGING: Reformats the entered value according to its current type (e.g., if it's Hex, it becomes 0xAAAA) before printing it to the log.
+                                string formattedLogValue = ModbusLibrary.Utils.ModbusDataFormatter.FormatValue(new ushort[] { valueToWrite }, 0, selectedType);
+                                AddLog($"Success: {formattedLogValue} written to Register[{address}].");
                             }
-                            else // For 32/64 bit values ​​such as Float, Double, Long, etc.
+                            else // Float, Double etc.
                             {
                                 ushort[] registersToWrite = ModbusLibrary.Utils.ModbusDataFormatter.BuildMultiRegisterValue(dialog.InputValue, selectedType);
                                 await _master.WriteMultipleRegistersAsync(slaveId, address, registersToWrite);
-                                AddLog($"Success: Data ({selectedType}) written to Register[{address}].");
+                                AddLog($"Success: {dialog.InputValue} ({selectedType}) written to Register[{address}].");
                             }
                         }
                     }

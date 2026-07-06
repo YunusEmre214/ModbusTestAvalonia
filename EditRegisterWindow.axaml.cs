@@ -8,13 +8,13 @@ namespace ModbusTestAvalonia
         public string InputValue { get; private set; } = string.Empty;
         public bool IsConfirmed { get; private set; } = false;
 
-        // Varsayılan constructor
+        // Default constructor
         public EditRegisterWindow()
         {
             InitializeComponent();
         }
 
-        // Pencere açılırken mevcut değeri içine yazmak için özel constructor
+        // Special constructor to write the current value into the window when it opens
         public EditRegisterWindow(string currentValue)
         {
             InitializeComponent();
@@ -22,7 +22,7 @@ namespace ModbusTestAvalonia
             if (txt != null)
             {
                 txt.Text = currentValue;
-                txt.Focus(); // Ekran açılınca imleç direkt kutuda olsun
+                txt.Focus(); // When the screen turns on, the cursor should be directly on the box.
             }
         }
 
@@ -30,12 +30,12 @@ namespace ModbusTestAvalonia
         {
             InputValue = this.FindControl<TextBox>("txtValue")?.Text ?? "0";
             IsConfirmed = true;
-            this.Close(); // Pencereyi kapat ve onayı gönder
+            this.Close(); // Close the window and send the approval message
         }
 
         private void BtnCancel_Click(object sender, RoutedEventArgs e)
         {
-            this.Close(); // İptal et
+            this.Close(); // Cancel
         }
     }
 }
