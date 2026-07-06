@@ -16,7 +16,7 @@ namespace ModbusTestAvalonia
         private ModbusMaster? _master;
         private ITransport? _transport;
         private bool _isConnected = false;
-        //private TextBox txtPollInterval;
+        
 
 
 
@@ -40,7 +40,7 @@ namespace ModbusTestAvalonia
             lstDevices.ItemsSource = DeviceList;
             lstLogs.ItemsSource = LogData; // We linked the log list
 
-            DeviceList.Add(new SlaveDevice { Name = "All Slaves", SlaveId = 1, IpAddress = "127.0.0.1" });
+            
 
             cmbFunction.DropDownOpened += (s, e) => { if (_isConnected) timerPoll.Stop(); };
             cmbFunction.DropDownClosed += (s, e) => { if (_isConnected) timerPoll.Start(); };
@@ -60,6 +60,13 @@ namespace ModbusTestAvalonia
             }
             if (!_isConnected)
             {
+                if (!byte.TryParse(txtSlaveId.Text, out _) ||
+                    !ushort.TryParse(txtStartAddress.Text, out _) ||
+                    !ushort.TryParse(txtQuantity.Text, out ushort q) || q <= 0)
+                {
+                    AddLog("Warning: Please fix the Slave ID, Start Address, or Quantity fields before connecting.");
+                    return; // Bağlantı işlemini başlatmadan iptal et
+                }
                 try
                 {
                     string ipOrCom = txtIpAddress.Text ?? "127.0.0.1";
@@ -122,12 +129,41 @@ namespace ModbusTestAvalonia
         private async void TimerPoll_Tick(object? sender, EventArgs e)
         {
             if (_master == null || !_isConnected) return;
+            if (!byte.TryParse(txtSlaveId.Text, out byte slaveId))
+            {
+                AddLog("Error: Invalid or empty Slave ID! Connection closed.");
+                timerPoll.Stop();
+                _transport?.Disconnect();
+                _isConnected = false;
+                btnConnect.Content = "Connect";
+                return;
+            }
+
+            if (!ushort.TryParse(txtStartAddress.Text, out ushort startAddress))
+            {
+                AddLog("Error: Invalid or empty Start Address! Connection closed.");
+                timerPoll.Stop();
+                _transport?.Disconnect();
+                _isConnected = false;
+                btnConnect.Content = "Connect";
+                return;
+            }
+
+            if (!ushort.TryParse(txtQuantity.Text, out ushort quantity) || quantity <= 0)
+            {
+                AddLog("Error: Quantity must be a valid number greater than 0! Connection closed.");
+                timerPoll.Stop();
+                _transport?.Disconnect();
+                _isConnected = false;
+                btnConnect.Content = "Connect";
+                return;
+            }
 
             try
             {
-                if (!byte.TryParse(txtSlaveId.Text, out byte slaveId)) return;
-                if (!ushort.TryParse(txtStartAddress.Text, out ushort startAddress)) return;
-                if (!ushort.TryParse(txtQuantity.Text, out ushort quantity) || quantity <= 0) return;
+                //if (!byte.TryParse(txtSlaveId.Text, out byte slaveId)) return;
+                //if (!ushort.TryParse(txtStartAddress.Text, out ushort startAddress)) return;
+                //if (!ushort.TryParse(txtQuantity.Text, out ushort quantity) || quantity <= 0) return;
 
                 int funcIndex = cmbFunction.SelectedIndex;
 
@@ -294,7 +330,18 @@ namespace ModbusTestAvalonia
         {
             if (byte.TryParse(txtNewDevId.Text, out byte id) && !string.IsNullOrWhiteSpace(txtNewDevName.Text))
             {
-                var newDev = new SlaveDevice { Name = txtNewDevName.Text, SlaveId = id, IpAddress = txtIpAddress.Text ?? "127.0.0.1" };
+                var newDev = new SlaveDevice
+                {
+                    Name = txtNewDevName.Text,
+                    SlaveId = id,
+                    IpAddress = txtIpAddress.Text ?? "127.0.0.1",
+                    Port = txtPort.Text ?? "502",
+                    SelectedConnectionIndex = cmbConnectionType.SelectedIndex,
+                    SelectedFunctionIndex = cmbFunction.SelectedIndex,
+                    SelectedDataTypeIndex = cmbDataType.SelectedIndex,
+                    StartAddress = txtStartAddress.Text ?? "0",
+                    Quantity = txtQuantity.Text ?? "10"
+                };
                 DeviceList.Add(newDev);
                 AddLog($"New device added: {newDev.Name} (ID: {id})");
                 txtNewDevName.Text = "";
@@ -317,12 +364,42 @@ namespace ModbusTestAvalonia
 
         private void LstDevices_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
+            if (_isConnected)
+            {
+                timerPoll.Stop();
+                _transport?.Disconnect();
+                _isConnected = false;
+                btnConnect.Content = "Connect";
+                AddLog("Device switched. Disconnected from the previous device.");
+            }
+            // 1. Save the current UI values ​​of the (old) device whose selection has been changed to the object.
+            if (e.RemovedItems.Count > 0 && e.RemovedItems[0] is SlaveDevice oldDevice)
+            {
+                if (byte.TryParse(txtSlaveId.Text, out byte oldId)) oldDevice.SlaveId = oldId;
+                oldDevice.IpAddress = txtIpAddress.Text ?? "";
+                oldDevice.Port = txtPort.Text ?? "";
+                oldDevice.SelectedConnectionIndex = cmbConnectionType.SelectedIndex;
+                oldDevice.SelectedFunctionIndex = cmbFunction.SelectedIndex;
+                oldDevice.SelectedDataTypeIndex = cmbDataType.SelectedIndex;
+                oldDevice.StartAddress = txtStartAddress.Text ?? "0";
+                oldDevice.Quantity = txtQuantity.Text ?? "10";
+                oldDevice.PollInterval = txtPollInterval.Text ?? "1000";
+            }
+
+            // 2. Load the values ​​of the newly selected device into the UI.
             if (lstDevices.SelectedItem is SlaveDevice selectedDevice)
             {
-                txtSlaveId.Text = selectedDevice.SlaveId.ToString();
+                cmbConnectionType.SelectedIndex = selectedDevice.SelectedConnectionIndex;
                 txtIpAddress.Text = selectedDevice.IpAddress;
+                txtPort.Text = selectedDevice.Port;
+
+                txtSlaveId.Text = selectedDevice.SlaveId.ToString();
                 cmbFunction.SelectedIndex = selectedDevice.SelectedFunctionIndex;
                 cmbDataType.SelectedIndex = selectedDevice.SelectedDataTypeIndex;
+                txtStartAddress.Text = selectedDevice.StartAddress;
+                txtQuantity.Text = selectedDevice.Quantity;
+                txtPollInterval.Text=selectedDevice.PollInterval;
+
                 AddLog($"Device changed: {selectedDevice.Name}");
             }
         }
@@ -412,8 +489,13 @@ namespace ModbusTestAvalonia
         public string Name { get; set; } = string.Empty;
         public byte SlaveId { get; set; }
         public string IpAddress { get; set; } = "127.0.0.1";
+        public string Port { get; set; } = "502";
+        public int SelectedConnectionIndex { get; set; } = 0;
         public int SelectedFunctionIndex { get; set; } = 2;
         public int SelectedDataTypeIndex { get; set; } = 1;
+        public string StartAddress { get; set; } = "0";
+        public string Quantity { get; set; } = "10";
+        public string PollInterval { get; set;  } = "1000";
     }
     
 
