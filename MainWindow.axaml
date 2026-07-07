@@ -32,17 +32,17 @@
 			</StackPanel>
 
 			<!-- YENİ SATIR: Serial Port (RTU) seçiliyken görünen ayarlar -->
-			<StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="10" Margin="0,0,0,15">
-				<TextBlock Name="lblDataBits" Text="Data Bits:" VerticalAlignment="Center" FontWeight="Bold" IsVisible="False"/>
-				<ComboBox Name="cmbDataBits" Width="120" SelectedIndex="0" IsVisible="False">
+			<StackPanel Name="pnlSerialSettings" Grid.Row="1" Orientation="Horizontal" Spacing="10" Margin="0,0,0,15"  IsVisible="False">
+				<TextBlock Name="lblDataBits" Text="Data Bits:" VerticalAlignment="Center" FontWeight="Bold"/>
+				<ComboBox Name="cmbDataBits" Width="120" SelectedIndex="0">
 					<ComboBoxItem Content="8 Data Bits"/>
 					<ComboBoxItem Content="7 Data Bits"/>
 					<ComboBoxItem Content="6 Data Bits"/>
 					<ComboBoxItem Content="5 Data Bits"/>
 				</ComboBox>
 
-				<TextBlock Name="lblParity" Text="Parity:" VerticalAlignment="Center" FontWeight="Bold" IsVisible="False"/>
-				<ComboBox Name="cmbParity" Width="150" SelectedIndex="0" IsVisible="False">
+				<TextBlock Name="lblParity" Text="Parity:" VerticalAlignment="Center" FontWeight="Bold"/>
+				<ComboBox Name="cmbParity" Width="150" SelectedIndex="0">
 					<ComboBoxItem Content="None Parity"/>
 					<ComboBoxItem Content="Odd Parity"/>
 					<ComboBoxItem Content="Even Parity"/>
@@ -50,8 +50,8 @@
 					<ComboBoxItem Content="Space Parity"/>
 				</ComboBox>
 
-				<TextBlock Name="lblStopBits" Text="Stop Bits:" VerticalAlignment="Center" FontWeight="Bold" IsVisible="False"/>
-				<ComboBox Name="cmbStopBits" Width="200" SelectedIndex="0" IsVisible="False">
+				<TextBlock Name="lblStopBits" Text="Stop Bits:" VerticalAlignment="Center" FontWeight="Bold"/>
+				<ComboBox Name="cmbStopBits" Width="200" SelectedIndex="0">
 					<ComboBoxItem Content="One Stop Bits"/>
 					<ComboBoxItem Content="OnePointFive Stop Bits"/>
 					<ComboBoxItem Content="Two Stop Bits"/>
@@ -59,13 +59,13 @@
 			</StackPanel>
 
 			<StackPanel Grid.Row="2" Orientation="Horizontal" Spacing="10" Margin="0,0,0,15">
-				<TextBlock Text="Slave ID:" VerticalAlignment="Center"/>
+				<TextBlock Text="Slave ID:" VerticalAlignment="Center" FontWeight="Bold"/>
 				<TextBox Name="txtSlaveId" Text="1" Width="40" TextChanged="NumericTextBox_TextChanged"/>
 
-				<TextBlock Text="Start:" VerticalAlignment="Center"/>
+				<TextBlock Text="Start Address:" VerticalAlignment="Center" FontWeight="Bold"/>
 				<TextBox Name="txtStartAddress" Text="0" Width="60" TextChanged="NumericTextBox_TextChanged"/>
 
-				<TextBlock Text="Quantity:" VerticalAlignment="Center"/>
+				<TextBlock Text="Quantity:" VerticalAlignment="Center" FontWeight="Bold"/>
 				<TextBox Name="txtQuantity" Text="10" Width="60" TextChanged="NumericTextBox_TextChanged"/>
 
 				<ComboBox Name="cmbFunction" SelectedIndex="2" Width="180">

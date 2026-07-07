@@ -41,7 +41,7 @@ namespace ModbusTestAvalonia
         {
             if (_activeDevice != null)
             {
-                // Ekrandaki yeni seçimi, aktif cihazın hafızasına yaz
+                // Ekrandaki yeni seçimi, aktif cihazın hafızasına yazCmbConnectionType_SelectionChanged
                 _activeDevice.SelectedDataTypeIndex = cmbDataType.SelectedIndex;
             }
         }
@@ -754,30 +754,22 @@ namespace ModbusTestAvalonia
                 lblIpAddress.Text = "COM Port:";
                 lblPort.Text = "Baud Rate:";
 
-                // TextBox'ları gizle, ComboBox'ları göster
                 txtIpAddress.IsVisible = false;
                 txtPort.IsVisible = false;
                 cmbComPort.IsVisible = true;
                 cmbBaudRate.IsVisible = true;
 
-                // Mevcut COM portlarını doldur
                 cmbComPort.ItemsSource = System.IO.Ports.SerialPort.GetPortNames();
                 if (cmbComPort.SelectedIndex < 0 && cmbComPort.ItemCount > 0)
                     cmbComPort.SelectedIndex = 0;
 
-                // Baud rate listesini doldur (henüz doldurulmadıysa)
                 if (cmbBaudRate.ItemsSource == null)
                 {
                     cmbBaudRate.ItemsSource = BaudRates;
                     cmbBaudRate.SelectedItem = 9600;
                 }
 
-                cmbDataBits.IsVisible = true;
-                cmbParity.IsVisible = true;
-                cmbStopBits.IsVisible = true;
-                lblDataBits.IsVisible = true;
-                lblParity.IsVisible = true;
-                lblStopBits.IsVisible = true;
+                pnlSerialSettings.IsVisible = true;   // <-- satırın tamamını göster
             }
             else
             {
@@ -792,12 +784,7 @@ namespace ModbusTestAvalonia
                 cmbComPort.IsVisible = false;
                 cmbBaudRate.IsVisible = false;
 
-                cmbDataBits.IsVisible = false;
-                cmbParity.IsVisible = false;
-                cmbStopBits.IsVisible = false;
-                lblDataBits.IsVisible = false;
-                lblParity.IsVisible = false;
-                lblStopBits.IsVisible = false;
+                pnlSerialSettings.IsVisible = false;  // <-- satırın tamamını gizle
             }
         }
     }
