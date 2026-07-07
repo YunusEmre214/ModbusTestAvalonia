@@ -17,11 +17,12 @@ namespace ModbusTestAvalonia
     public partial class MainWindow : Window
     {
         private SlaveDevice? _activeDevice;
+        private TrafficWindow _trafficWindow = new TrafficWindow();
 
         public ObservableCollection<SlaveDevice> DeviceList { get; set; } = new ObservableCollection<SlaveDevice>();
         public ObservableCollection<LogEntry> LogData { get; set; } = new ObservableCollection<LogEntry>();
 
-        // Fonksiyon/veri tipi ComboBox index -> string eşlemeleri (arka planda ekran olmadan kullanmak için)
+        // Function/data type ComboBox index -> string mappings (for use in the background without displaying the screen)
         private static readonly string[] FunctionNames = { "Coil", "Input", "Register", "InpReg" };
         
         private static readonly string[] DataTypeNames = { "Signed", "Unsigned", "Hex", "Binary", "Float", "Float inverse", "Double", "Double Inverse", "Long", "Long Inverse" };
@@ -30,18 +31,47 @@ namespace ModbusTestAvalonia
             InitializeComponent();
             txtPollInterval = this.FindControl<TextBox>("txtPollInterval")!;
 
-            dataGridViewRegisters.ItemsSource = null; // aşağıda aktif cihaz seçilince set edilecek
+            dataGridViewRegisters.ItemsSource = null; // will be set when the active device is selected below
             lstDevices.ItemsSource = DeviceList;
             lstLogs.ItemsSource = LogData;
 
             cmbDataType.SelectionChanged += CmbDataType_SelectionChanged;
             cmbFunction.SelectionChanged += CmbFunction_SelectionChanged;
+
+            // We capture the Traffic event launched from the library and add it to the list.
+            ModbusLibrary.Utils.ModbusTrafficLogger.OnTraffic = (data, isTx) =>
+            {
+                // HERE'S THE MIRACLE LINE: If the user presses the Stop button, the UI immediately stops logging!
+                // (But the devices continue communicating with each other in the background)
+                if (TrafficWindow.IsPaused) return;
+
+                if (data == null || data.Length == 0) return;
+
+                string direction = isTx ? "Tx" : "Rx";
+                string hexFormat = BitConverter.ToString(data).Replace("-", " ");
+
+                string logLine = $"{TrafficWindow.LogCounter:D6}-{direction}:00 {hexFormat}";
+
+                Dispatcher.UIThread.Post(() =>
+                {
+                    TrafficWindow.TrafficLogs.Add(logLine);
+                    TrafficWindow.LogCounter++;
+
+                    if (TrafficWindow.TrafficLogs.Count > 1000)
+                        TrafficWindow.TrafficLogs.RemoveAt(0);
+                });
+            };
+        }
+        private void BtnTraffic_Click(object sender, RoutedEventArgs e)
+        {
+            // We're just making it visible because the window was created beforehand.
+            _trafficWindow.Show(this);
         }
         private void CmbDataType_SelectionChanged(object? sender, SelectionChangedEventArgs e)
         {
             if (_activeDevice != null)
             {
-                // Ekrandaki yeni seçimi, aktif cihazın hafızasına yazCmbConnectionType_SelectionChanged
+                // Write the new selection on the screen to the active device's memory. CmbConnectionType_SelectionChanged
                 _activeDevice.SelectedDataTypeIndex = cmbDataType.SelectedIndex;
             }
         }
@@ -50,12 +80,12 @@ namespace ModbusTestAvalonia
         {
             if (_activeDevice != null)
             {
-                // Ekrandaki yeni seçimi, aktif cihazın hafızasına yaz
+                // Write the new selection on the screen to the memory of the active device.
                 _activeDevice.SelectedFunctionIndex = cmbFunction.SelectedIndex;
             }
         }
 
-        // --- BAĞLAN / KES ---
+        // --- CONNECT / DISCONNECT ---
         private async void BtnConnect_Click(object sender, RoutedEventArgs e)
         {
             if (_activeDevice == null) { AddLog("Warning: No device selected."); return; }
@@ -78,7 +108,7 @@ namespace ModbusTestAvalonia
                 return;
             }
 
-            // Ekrandaki güncel ayarları cihaza yaz (bağlanmadan önce senkronla)
+            // Write the current settings on the screen to the device (synchronize before connecting)
             SyncScreenToDevice(_activeDevice);
             
             try
@@ -143,12 +173,12 @@ namespace ModbusTestAvalonia
                 AddLog($"{_activeDevice.Name}: Connection Error - device offline or unreachable.");
             }
         }
-        
 
-        // --- HER CİHAZ İÇİN ARKA PLAN POLL DÖNGÜSÜ ---
+
+        // --- BACKGROUND POLL CYCLE FOR EACH DEVICE ---
         private void StartDevicePolling(SlaveDevice device)
         {
-            StopDevicePolling(device); // varsa eskisini iptal et
+            StopDevicePolling(device); // cancel the old one if it exists
 
             var cts = new CancellationTokenSource();
             device.PollCts = cts;
@@ -186,7 +216,7 @@ namespace ModbusTestAvalonia
                             Dispatcher.UIThread.Post(() => btnConnect.Content = "Connect");
                         }
                     }
-                    break; // bu cihazın döngüsünü sonlandır
+                    break; // finish this device loop
                 }
 
                 try { await Task.Delay(intervalMs, token); }
@@ -194,7 +224,7 @@ namespace ModbusTestAvalonia
             }
         }
 
-        // Tek bir okuma turu — sadece device'ın kendi ayarlarına bakar, ekrandaki textbox'lara BAKMAZ
+        // Single round of reading — only looks at the device's own settings, NOT the textboxes on the screen
         private async Task PollDeviceOnce(SlaveDevice device)
         {
             if (device.Master == null || !device.IsConnected) return;
@@ -204,7 +234,7 @@ namespace ModbusTestAvalonia
             if (!ushort.TryParse(device.Quantity, out ushort quantity) || quantity == 0) return;
 
             var master = device.Master;
-            int funcIndex = device.SelectedFunctionIndex;
+            int funcIndex = device.SelectedFunctionIndex; 
 
             if (funcIndex == 0 || funcIndex == 1)
             {
@@ -253,14 +283,18 @@ namespace ModbusTestAvalonia
             }
         }
 
-        // Cihazın kendi RegisterData'sını günceller — UI thread'e Dispatcher ile geçiyoruz
+        // Updates the device's own RegisterData — Passing this to the UI thread via Dispatcher
         private void UpdateDeviceGrid(SlaveDevice device, int startAddress, int rowCount, int step, int funcIndex, bool[]? bitValues, ushort[]? regValues, string selectedType)
         {
             string prefix = FunctionNames.ElementAtOrDefault(funcIndex) ?? "Address";
 
             Dispatcher.UIThread.Post(() =>
             {
-                if (device.RegisterData.Count != rowCount)
+                bool needsRebuild = device.RegisterData.Count != rowCount
+                    || device.LastGridFuncIndex != funcIndex
+                    || device.LastGridStep != step;
+
+                if (needsRebuild)
                 {
                     device.RegisterData.Clear();
                     for (int i = 0; i < rowCount; i++)
@@ -272,6 +306,9 @@ namespace ModbusTestAvalonia
                             RawAddress = startAddress + (i * step)
                         });
                     }
+
+                    device.LastGridFuncIndex = funcIndex;
+                    device.LastGridStep = step;
                 }
 
                 for (int i = 0; i < rowCount; i++)
@@ -284,7 +321,7 @@ namespace ModbusTestAvalonia
             });
         }
 
-        // --- TEXTBOX FİLTRELERİ (değişmedi) ---
+        // --- TEXTBOX FILTERS (unchanged) ---
         private void NumericTextBox_TextChanged(object? sender, TextChangedEventArgs e)
         {
             if (sender is TextBox textBox && !string.IsNullOrEmpty(textBox.Text))
@@ -329,54 +366,54 @@ namespace ModbusTestAvalonia
 
                 if (selectedType == "Hex")
                 {
-                    // HEX: Sadece rakam, A-F harfleri ve x/X
+                    // HEX: Numbers only, letters A-F and x/X
                     newText = new string(originalText.Where(c => char.IsDigit(c) || "abcdefABCDEFxX".Contains(c)).ToArray());
                     int maxLen = newText.StartsWith("0x", StringComparison.OrdinalIgnoreCase) ? 6 : 4;
                     if (newText.Length > maxLen) newText = newText.Substring(0, maxLen);
                 }
                 else if (selectedType == "Binary")
                 {
-                    // BINARY: Sadece 0 ve 1
+                    // BINARY: Only 0 and 1
                     newText = new string(originalText.Where(c => c == '0' || c == '1').ToArray());
                     if (newText.Length > 16) newText = newText.Substring(0, 16);
                 }
                 else if (selectedType.Contains("Float") || selectedType.Contains("Double"))
                 {
-                    // FLOAT / DOUBLE: Rakamlar, Eksi (-), Nokta (.) ve Virgül (,)
+                    // FLOAT / DOUBLE: Numbers, Minus (-), Period (.) and Comma (,)
                     newText = new string(originalText.Where(c => char.IsDigit(c) || c == '-' || c == '.' || c == ',').ToArray());
-                    
-                    // Float için 15, Double için 20 karakter sınırı (eksi ve ondalık ayraç dahil)
+
+                    // 15 character limit for Float, 20 character limit for Double (including minus and decimal separators)
                     int maxLen = selectedType.Contains("Float") ? 15 : 20;
                     if (newText.Length > maxLen) newText = newText.Substring(0, maxLen);
                 }
                 else if (selectedType.Contains("Long") || selectedType == "Signed")
                 {
-                    // LONG / SIGNED (Tam Sayılar): Sadece Rakamlar ve Eksi (-) işareti. KÜSURAT YASAK!
+                    // LONG / SIGNED (Integers): Only digits and the minus (-) sign. Fractions are forbidden!
                     newText = new string(originalText.Where(c => char.IsDigit(c) || c == '-').ToArray());
 
-                    // Signed (16-bit) için 6 karakter, Long (64-bit) için 20 karakter sınırı
+                    // 6 character limit for Signed (16-bit), 20 character limit for Long (64-bit)
                     int maxLen = selectedType.Contains("Long") ? 11 : 6;
                     if (newText.Length > maxLen) newText = newText.Substring(0, maxLen);
                 }
                 else
                 {
-                    // UNSIGNED (Varsayılan): Sadece Rakam. Eksi ve virgül yasak.
+                    // UNSIGNED (Default): Numbers only. Minus signs and commas are forbidden.
                     newText = new string(originalText.Where(char.IsDigit).ToArray());
-                    
-                    // Unsigned 16-bit maks 65535 olabilir (5 karakter)
+
+                    // Unsigned 16-bit, maximum 65535 characters (5 characters)
                     if (newText.Length > 5) newText = newText.Substring(0, 5);
                 }
 
-                // Eğer kullanıcının girdiği hatalı/fazla karakterler silindiyse TextBox'ı güncelle
+                // Update the TextBox if incorrect/excess characters entered by the user are deleted.
                 if (originalText != newText)
                 {
                     textBox.Text = newText;
-                    textBox.CaretIndex = newText.Length; // İmleci en sona at
+                    textBox.CaretIndex = newText.Length; // Move the cursor to the end
                 }
             }
         }
 
-        // --- YAZMA (aktif cihaz üzerinden, senkron - polling'i etkilemez çünkü artık ayrı Task) ---
+        // --- WRITE (via active device, synchronous - does not affect polling because it is now a separate Task) ---
         private async void BtnWrite_Click(object sender, RoutedEventArgs e)
         {
             if (_activeDevice?.Master == null || !_activeDevice.IsConnected)
@@ -417,8 +454,8 @@ namespace ModbusTestAvalonia
                     string selectedType = (cmbDataType.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? "Unsigned";
                     ushort[] registersToWrite;
 
-                    // --- ADIM 1: VERİ DÖNÜŞTÜRME (LOKAL İŞLEM) ---
-                    // Eğer burada hata çıkarsa ağ bağlantısını koparmayacağız, sadece log atıp iptal edeceğiz.
+                    // --- STEP 1: DATA TRANSFORMATION (LOCAL PROCESS) ---
+                    // If an error occurs here, we will not disconnect the network; we will simply log the error and cancel the process.
                     try
                     {
                         if (selectedType is "Signed" or "Unsigned" or "Hex" or "Binary")
@@ -434,10 +471,10 @@ namespace ModbusTestAvalonia
                     catch (Exception parseEx)
                     {
                         AddLog($"Format Error: '{selectedType}' could not be converted. Library Error: {parseEx.Message}");
-                        return; // Sistemi durdurmadan işlemi iptal et!
+                        return; // Cancel the operation without stopping the system!
                     }
 
-                    // --- ADIM 2: AĞ ÜZERİNDEN YAZMA (HABERLEŞME) ---
+                    // --- STEP 2: WRITING (COMMUNICATION) OVER THE NETWORK ---
                     if (registersToWrite.Length == 1)
                     {
                         await master.WriteSingleRegisterAsync(slaveId, address, registersToWrite[0]);
@@ -453,7 +490,7 @@ namespace ModbusTestAvalonia
             }
             catch (Exception ex)
             {
-                // BURAYA SADECE GERÇEK AĞ HATALARINDA DÜŞER
+                // ONLY THIS APPEARS IN CASE OF GENUINE NETWORK FAULTS
                 AddLog($"Communication Error: {ex.Message}");
                 if (device.IsConnected)
                 {
@@ -465,7 +502,7 @@ namespace ModbusTestAvalonia
             }
         }
 
-        // --- CİHAZ YÖNETİMİ ---
+        // --- DEVICE MANAGEMENT ---
         private void BtnAddDevice_Click(object sender, RoutedEventArgs e)
         {
             if (byte.TryParse(txtNewDevId.Text, out byte id) && !string.IsNullOrWhiteSpace(txtNewDevName.Text))
@@ -531,7 +568,7 @@ namespace ModbusTestAvalonia
             }
         }
 
-        // Ekrandaki (textbox/combobox) değerleri, cihazın kendi ayarlarına yazar 
+        // Writes the values ​​displayed on the screen (textbox/combobox) to the device's own settings.
         private void SyncScreenToDevice(SlaveDevice device)
         {
             if (byte.TryParse(txtSlaveId.Text, out byte id)) device.SlaveId = id;
@@ -559,15 +596,15 @@ namespace ModbusTestAvalonia
 
         private void LstDevices_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
-            // Eski cihazın form alanlarını kaydet (bağlantı/polling'e DOKUNMUYORUZ, arka planda devam etsin)
+            // Save the form fields from the old device (DO NOT TOUCH the linking/polling, let it continue in the background)
             if (e.RemovedItems.Count > 0 && e.RemovedItems[0] is SlaveDevice oldDevice)
             {
                 SyncScreenToDevice(oldDevice);
 
-                // Eğer poll interval değiştiyse ve cihaz bağlıysa, çalışan görevi yeni interval ile yeniden başlat
+                // If the poll interval has changed and the device is connected, restart the running task with the new interval.
                 if (oldDevice.IsConnected)
                 {
-                    StartDevicePolling(oldDevice); // interval güncellemesi için restart (opsiyonel ama güvenli)
+                    StartDevicePolling(oldDevice); // Restart for interval update (optional but safe)
                 }
             }
 
@@ -578,7 +615,7 @@ namespace ModbusTestAvalonia
                 cmbConnectionType.SelectedIndex = selectedDevice.SelectedConnectionIndex;
                 if (selectedDevice.SelectedConnectionIndex == 1) // Serial Port (RTU)
                 {
-                    // CmbConnectionType_SelectionChanged zaten tetiklendi ve listeyi doldurdu
+                    // CmbConnectionType_SelectionChanged has already been triggered and populated the list.
                     if (!string.IsNullOrEmpty(selectedDevice.IpAddress))
                         cmbComPort.SelectedItem = selectedDevice.IpAddress;
 
@@ -600,7 +637,7 @@ namespace ModbusTestAvalonia
                 txtQuantity.Text = selectedDevice.Quantity;
                 txtPollInterval.Text = selectedDevice.PollInterval;
 
-                // Grid'i bu cihazın KENDİ verisine bağla — ayrı Clear/doldurma yok, veri zaten arka planda birikiyor
+                // Connect the grid to this device's OWN data — no separate clear/fill, data is already accumulating in the background.
                 dataGridViewRegisters.ItemsSource = selectedDevice.RegisterData;
                 
                 if (selectedDevice.IsConnected && selectedDevice.Transport != null)
@@ -658,7 +695,7 @@ namespace ModbusTestAvalonia
                     {
                         ushort[] registersToWrite;
 
-                        // --- ADIM 1: VERİ DÖNÜŞTÜRME (LOKAL İŞLEM) ---
+                        // --- STEP 1: DATA TRANSFORMATION (LOCAL PROCESS) ---
                         try
                         {
                             if (selectedType is "Signed" or "Unsigned" or "Hex" or "Binary")
@@ -673,12 +710,12 @@ namespace ModbusTestAvalonia
                         }
                         catch (Exception parseEx)
                         {
-                            // Dönüştürme hatası: Bağlantıyı KESME, sadece log at
+                            // Conversion error: Disconnect, just log
                             AddLog($"Format Error: Failed to parse '{selectedType}'. Library Error: {parseEx.Message}");
                             return;
                         }
 
-                        // --- ADIM 2: AĞ ÜZERİNDEN YAZMA ---
+                        // --- STEP 2: WRITING OVER THE NETWORK ---
                         try
                         {
                             if (registersToWrite.Length == 1)
@@ -702,7 +739,7 @@ namespace ModbusTestAvalonia
             }
         }
 
-        // Kodu temiz tutmak için ağ hatası yakalama işlemini küçük bir yardımcı metoda aldık
+        // To keep the code clean, we moved network error handling to a small helper method.
         private void HandleCommError(SlaveDevice device, ushort address, Exception ex)
         {
             AddLog($"Communication Error while writing to Address [{address}]: {ex.Message}");
@@ -769,7 +806,7 @@ namespace ModbusTestAvalonia
                     cmbBaudRate.SelectedItem = 9600;
                 }
 
-                pnlSerialSettings.IsVisible = true;   // <-- satırın tamamını göster
+                pnlSerialSettings.IsVisible = true;   
             }
             else
             {
@@ -784,7 +821,7 @@ namespace ModbusTestAvalonia
                 cmbComPort.IsVisible = false;
                 cmbBaudRate.IsVisible = false;
 
-                pnlSerialSettings.IsVisible = false;  // <-- satırın tamamını gizle
+                pnlSerialSettings.IsVisible = false;  
             }
         }
     }
@@ -822,9 +859,12 @@ namespace ModbusTestAvalonia
 
         [JsonIgnore] public ITransport? Transport { get; set; }
         [JsonIgnore] public ModbusMaster? Master { get; set; }
+        
         [JsonIgnore] public CancellationTokenSource? PollCts { get; set; }
+        [JsonIgnore] public int LastGridFuncIndex { get; set; } = -1;
+        [JsonIgnore] public int LastGridStep { get; set; } = -1;
 
-        // Her cihazın kendi register grid verisi — grid buna bağlanır
+        // Each device has its own register grid data — the grid is linked to this.
         [JsonIgnore] public ObservableCollection<RegisterRow> RegisterData { get; } = new();
 
         private bool _isConnected = false;
@@ -842,6 +882,7 @@ namespace ModbusTestAvalonia
                 }
             }
         }
+        
 
         [JsonIgnore]
         public string StatusColor => IsConnected ? "LimeGreen" : "Red";

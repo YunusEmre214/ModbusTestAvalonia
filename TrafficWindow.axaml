@@ -1,0 +1,28 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="ModbusTestAvalonia.TrafficWindow"
+        Title="Communication Traffic" Width="650" Height="400"
+        WindowStartupLocation="CenterOwner">
+	<Grid RowDefinitions="Auto, *">
+		<StackPanel Orientation="Horizontal" Spacing="10" Margin="10">
+			<Button Name="btnPause" Content="Stop" Click="BtnPause_Click" Width="80" HorizontalContentAlignment="Center" Background="#b22222" Foreground="White" FontWeight="Bold"/>
+
+			<Button Content="Clear" Click="BtnClear_Click" Width="80" HorizontalContentAlignment="Center"/>
+			<Button Content="Close" Click="BtnClose_Click" Width="80" HorizontalContentAlignment="Center"/>
+		</StackPanel>
+		<Border Grid.Row="1" Background="White" BorderBrush="Gray" BorderThickness="1" Margin="10,0,10,10">
+
+			<ScrollViewer Name="scrollViewer" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
+
+				<ItemsControl Name="lstTraffic" Margin="5">
+					<ItemsControl.ItemTemplate>
+						<DataTemplate>
+							<TextBlock Text="{Binding}" FontFamily="Consolas" FontSize="14" FontWeight="Bold" Foreground="Black"/>
+						</DataTemplate>
+					</ItemsControl.ItemTemplate>
+				</ItemsControl>
+			</ScrollViewer>
+
+		</Border>
+	</Grid>
+</Window>

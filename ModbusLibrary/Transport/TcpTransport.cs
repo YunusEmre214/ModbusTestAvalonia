@@ -1,22 +1,23 @@
 ﻿using System;
 using System.Buffers.Binary;
 using System.Net.Sockets;
-using System.Threading; 
+using System.Threading;
 using System.Threading.Tasks;
+using ModbusLibrary.Utils;
 
 namespace ModbusLibrary.Transport
 {
-    public class TcpTransport:ITransport
+    public class TcpTransport : ITransport
     {
         private TcpClient _tcpClient;
         private NetworkStream _stream;
-        
+
         private readonly SemaphoreSlim _lock = new SemaphoreSlim(1, 1);
 
-        public async Task ConnectAsync(string ipAddress, int port = 502)
+        public async Task ConnectAsync(string address, int port)
         {
             _tcpClient = new TcpClient();
-            await _tcpClient.ConnectAsync(ipAddress, port);
+            await _tcpClient.ConnectAsync(address, port);
             _stream = _tcpClient.GetStream();
         }
 
@@ -31,10 +32,11 @@ namespace ModbusLibrary.Transport
             if (_stream == null || !_stream.CanRead || !_stream.CanWrite)
                 throw new InvalidOperationException("Network connection is not active!");
 
-            
             await _lock.WaitAsync();
             try
             {
+                ModbusTrafficLogger.LogTx(request);
+
                 await _stream.WriteAsync(request, 0, request.Length);
 
                 byte[] mbapHeader = new byte[6];
@@ -49,11 +51,12 @@ namespace ModbusLibrary.Transport
                 Array.Copy(mbapHeader, 0, fullResponse, 0, 6);
                 Array.Copy(payload, 0, fullResponse, 6, remainingBytesToRead);
 
+                ModbusTrafficLogger.LogRx(fullResponse);
+
                 return fullResponse;
             }
             finally
             {
-                
                 _lock.Release();
             }
         }

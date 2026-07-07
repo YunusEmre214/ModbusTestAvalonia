@@ -97,6 +97,7 @@
 				<TextBox Name="txtWriteValue" Width="80" TextChanged="WriteValueTextBox_TextChanged"/>
 
 				<Button Name="btnWrite" Content="Write" Click="BtnWrite_Click" Width="80" HorizontalContentAlignment="Center"/>
+				<Button Name="btnTraffic" Content="Communacation Traffic" Click="BtnTraffic_Click" Width="200" HorizontalContentAlignment="Center" Margin="20,0,0,0" Background="#2b579a" Foreground="White" FontWeight="Bold"/>
 			</StackPanel>
 
 			<DataGrid Name="dataGridViewRegisters" x:CompileBindings="False" Grid.Row="4" AutoGenerateColumns="False" Margin="0,0,0,15" BorderBrush="Gray" BorderThickness="1"
