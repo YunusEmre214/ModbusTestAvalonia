@@ -8,12 +8,25 @@ namespace ModbusLibrary.Transport
     public class SerialTransport : ITransport
     {
         private SerialPort _serialPort;
-        private readonly int _timeout = 2000; // 2 seconds timeout
+        private readonly int _timeout = 2000;
+
+        // Seri porta özel değişkenler
+        private readonly int _dataBits;
+        private readonly Parity _parity;
+        private readonly StopBits _stopBits;
+
+        // CONSTRUCTOR: Sınıf yaratılırken ayarları buraya alıyoruz (Varsayılan 8-N-1)
+        public SerialTransport(int dataBits = 8, Parity parity = Parity.None, StopBits stopBits = StopBits.One)
+        {
+            _dataBits = dataBits;
+            _parity = parity;
+            _stopBits = stopBits;
+        }
 
         public async Task ConnectAsync(string portName, int baudRate)
         {
-            // Set up the serial port with standard Modbus RTU parameters (8-N-1)
-            _serialPort = new SerialPort(portName, baudRate, Parity.None, 8, StopBits.One)
+            // Sabit değerler yerine, yukarıdaki değişkenleri kullanıyoruz
+            _serialPort = new SerialPort(portName, baudRate, _parity, _dataBits, _stopBits)
             {
                 ReadTimeout = _timeout,
                 WriteTimeout = _timeout
@@ -21,11 +34,9 @@ namespace ModbusLibrary.Transport
 
             _serialPort.Open();
 
-            // Clear any old data sitting in the buffers
             _serialPort.DiscardInBuffer();
             _serialPort.DiscardOutBuffer();
 
-            await Task.CompletedTask;
         }
 
         public void Disconnect()

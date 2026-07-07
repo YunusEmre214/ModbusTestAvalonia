@@ -1,11 +1,11 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         x:Class="ModbusTestAvalonia.MainWindow"
-        Title="Modbus Master Test Tool (Avalonia)" Width="1120" Height="700">
+        Title="Modbus Master Test Tool (Avalonia)" Width="1220" Height="700">
 
 	<Grid ColumnDefinitions="*, 280" Margin="15">
 
-		<Grid Grid.Column="0" RowDefinitions="Auto, Auto, Auto, *, Auto" Margin="0,0,15,0">
+		<Grid Grid.Column="0" RowDefinitions="Auto, Auto, Auto, Auto, *, Auto" Margin="0,0,15,0">
 
 			<StackPanel Grid.Row="0" Orientation="Horizontal" Spacing="10" Margin="0,0,0,15">
 				<ComboBox Name="cmbConnectionType" SelectedIndex="0" Width="190" SelectionChanged="CmbConnectionType_SelectionChanged">
@@ -18,18 +18,47 @@
 
 				<TextBlock Name="lblIpAddress" Text="IP:" VerticalAlignment="Center" FontWeight="Bold"/>
 				<TextBox Name="txtIpAddress" Text="127.0.0.1" Width="110" TextChanged="IpTextBox_TextChanged"/>
+				<ComboBox Name="cmbComPort" Width="110" IsVisible="False"/>
 
 				<TextBlock Name="lblPort" Text="Port:" VerticalAlignment="Center" FontWeight="Bold"/>
-				<TextBox Name="txtPort" Text="502" Width="50" TextChanged="NumericTextBox_TextChanged"/>
+				<TextBox Name="txtPort" Text="502" Width="70" TextChanged="NumericTextBox_TextChanged"/>
+				<ComboBox Name="cmbBaudRate" Width="90" IsVisible="False"/>
 
 				<TextBlock Text="Intv[ms]:" VerticalAlignment="Center" FontWeight="Bold"/>
 				<TextBox Name="txtPollInterval" Text="1000" Width="50" TextChanged="NumericTextBox_TextChanged"/>
 
 				<Button Name="btnConnect" Content="Connect" Click="BtnConnect_Click" Width="100" HorizontalContentAlignment="Center"/>
-				
+
 			</StackPanel>
 
+			<!-- YENİ SATIR: Serial Port (RTU) seçiliyken görünen ayarlar -->
 			<StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="10" Margin="0,0,0,15">
+				<TextBlock Name="lblDataBits" Text="Data Bits:" VerticalAlignment="Center" FontWeight="Bold" IsVisible="False"/>
+				<ComboBox Name="cmbDataBits" Width="120" SelectedIndex="0" IsVisible="False">
+					<ComboBoxItem Content="8 Data Bits"/>
+					<ComboBoxItem Content="7 Data Bits"/>
+					<ComboBoxItem Content="6 Data Bits"/>
+					<ComboBoxItem Content="5 Data Bits"/>
+				</ComboBox>
+
+				<TextBlock Name="lblParity" Text="Parity:" VerticalAlignment="Center" FontWeight="Bold" IsVisible="False"/>
+				<ComboBox Name="cmbParity" Width="150" SelectedIndex="0" IsVisible="False">
+					<ComboBoxItem Content="None Parity"/>
+					<ComboBoxItem Content="Odd Parity"/>
+					<ComboBoxItem Content="Even Parity"/>
+					<ComboBoxItem Content="Mark Parity"/>
+					<ComboBoxItem Content="Space Parity"/>
+				</ComboBox>
+
+				<TextBlock Name="lblStopBits" Text="Stop Bits:" VerticalAlignment="Center" FontWeight="Bold" IsVisible="False"/>
+				<ComboBox Name="cmbStopBits" Width="200" SelectedIndex="0" IsVisible="False">
+					<ComboBoxItem Content="One Stop Bits"/>
+					<ComboBoxItem Content="OnePointFive Stop Bits"/>
+					<ComboBoxItem Content="Two Stop Bits"/>
+				</ComboBox>
+			</StackPanel>
+
+			<StackPanel Grid.Row="2" Orientation="Horizontal" Spacing="10" Margin="0,0,0,15">
 				<TextBlock Text="Slave ID:" VerticalAlignment="Center"/>
 				<TextBox Name="txtSlaveId" Text="1" Width="40" TextChanged="NumericTextBox_TextChanged"/>
 
@@ -60,7 +89,7 @@
 				</ComboBox>
 			</StackPanel>
 
-			<StackPanel Grid.Row="2" Orientation="Horizontal" Spacing="10" Margin="0,0,0,15">
+			<StackPanel Grid.Row="3" Orientation="Horizontal" Spacing="10" Margin="0,0,0,15">
 				<TextBlock Text="Write Address:" VerticalAlignment="Center" FontWeight="SemiBold"/>
 				<TextBox Name="txtWriteAddress" Width="60" TextChanged="NumericTextBox_TextChanged"/>
 
@@ -70,7 +99,7 @@
 				<Button Name="btnWrite" Content="Write" Click="BtnWrite_Click" Width="80" HorizontalContentAlignment="Center"/>
 			</StackPanel>
 
-			<DataGrid Name="dataGridViewRegisters" x:CompileBindings="False" Grid.Row="3" AutoGenerateColumns="False" Margin="0,0,0,15" BorderBrush="Gray" BorderThickness="1"
+			<DataGrid Name="dataGridViewRegisters" x:CompileBindings="False" Grid.Row="4" AutoGenerateColumns="False" Margin="0,0,0,15" BorderBrush="Gray" BorderThickness="1"
           DoubleTapped="DataGridViewRegisters_DoubleTapped">
 				<DataGrid.Columns>
 					<DataGridTextColumn Header="Address" Binding="{Binding Address}" IsReadOnly="True" Width="150"/>
@@ -78,7 +107,7 @@
 				</DataGrid.Columns>
 			</DataGrid>
 
-			<Border Grid.Row="4" Background="Black" BorderThickness="1" BorderBrush="Gray" Height="120">
+			<Border Grid.Row="5" Background="Black" BorderThickness="1" BorderBrush="Gray" Height="120">
 				<ScrollViewer>
 					<ItemsControl Name="lstLogs" x:CompileBindings="False" Margin="5">
 						<ItemsControl.ItemTemplate>

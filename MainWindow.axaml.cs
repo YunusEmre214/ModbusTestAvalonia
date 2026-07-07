@@ -80,12 +80,39 @@ namespace ModbusTestAvalonia
 
             // Ekrandaki güncel ayarları cihaza yaz (bağlanmadan önce senkronla)
             SyncScreenToDevice(_activeDevice);
-
+            
             try
             {
                 string ipOrCom = _activeDevice.IpAddress;
                 int portOrBaud = int.Parse(_activeDevice.Port);
                 string selectedConnection = (cmbConnectionType.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? "Modbus TCP/IP";
+
+                int selectedDataBits = cmbDataBits.SelectedIndex switch
+                {
+                    0 => 8,
+                    1 => 7,
+                    2 => 6,
+                    3 => 5,
+                    _ => 8
+                };
+
+                System.IO.Ports.Parity selectedParity = cmbParity.SelectedIndex switch
+                {
+                    0 => System.IO.Ports.Parity.None,
+                    1 => System.IO.Ports.Parity.Odd,
+                    2 => System.IO.Ports.Parity.Even,
+                    3 => System.IO.Ports.Parity.Mark,
+                    4 => System.IO.Ports.Parity.Space,
+                    _ => System.IO.Ports.Parity.None
+                };
+
+                System.IO.Ports.StopBits selectedStopBits = cmbStopBits.SelectedIndex switch
+                {
+                    0 => System.IO.Ports.StopBits.One,
+                    1 => System.IO.Ports.StopBits.OnePointFive,
+                    2 => System.IO.Ports.StopBits.Two,
+                    _ => System.IO.Ports.StopBits.One
+                }; 
 
                 ITransport transport = selectedConnection switch
                 {
@@ -93,12 +120,12 @@ namespace ModbusTestAvalonia
                     "Modbus UDP/IP" => new UdpTransport(),
                     "Modbus RTU Over TCP/IP" => new RtuOverTcpTransport(),
                     "Modbus RTU Over UDP/IP" => new RtuOverUdpTransport(),
-                    "Serial Port (RTU)" => new SerialTransport(),
+                    "Serial Port (RTU)" => new SerialTransport(selectedDataBits, selectedParity, selectedStopBits),
                     _ => new TcpTransport()
                 };
 
                 await transport.ConnectAsync(ipOrCom, portOrBaud);
-
+                
                 var device = _activeDevice;
                 device.Transport = transport;
                 device.Master = new ModbusMaster(transport);
@@ -116,6 +143,7 @@ namespace ModbusTestAvalonia
                 AddLog($"{_activeDevice.Name}: Connection Error - device offline or unreachable.");
             }
         }
+        
 
         // --- HER CİHAZ İÇİN ARKA PLAN POLL DÖNGÜSÜ ---
         private void StartDevicePolling(SlaveDevice device)
@@ -442,18 +470,32 @@ namespace ModbusTestAvalonia
         {
             if (byte.TryParse(txtNewDevId.Text, out byte id) && !string.IsNullOrWhiteSpace(txtNewDevName.Text))
             {
+                string ip, port;
+                if (cmbComPort.IsVisible)
+                {
+                    ip = cmbComPort.SelectedItem?.ToString() ?? "COM3";
+                    port = cmbBaudRate.SelectedItem?.ToString() ?? "9600";
+                }
+                else
+                {
+                    ip = txtIpAddress.Text ?? "127.0.0.1";
+                    port = txtPort.Text ?? "502";
+                }
                 var newDev = new SlaveDevice
                 {
                     Name = txtNewDevName.Text,
                     SlaveId = id,
-                    IpAddress = txtIpAddress.Text ?? "127.0.0.1",
-                    Port = txtPort.Text ?? "502",
+                    IpAddress = ip,
+                    Port = port,
                     SelectedConnectionIndex = cmbConnectionType.SelectedIndex,
                     SelectedFunctionIndex = cmbFunction.SelectedIndex,
                     SelectedDataTypeIndex = cmbDataType.SelectedIndex,
                     StartAddress = txtStartAddress.Text ?? "0",
                     Quantity = txtQuantity.Text ?? "10",
-                    PollInterval = txtPollInterval.Text ?? "1000"
+                    PollInterval = txtPollInterval.Text ?? "1000",
+                    SelectedDataBitsIndex = cmbDataBits.SelectedIndex,
+                    SelectedParityIndex = cmbParity.SelectedIndex,
+                    SelectedStopBitsIndex = cmbStopBits.SelectedIndex,
                 };
                 DeviceList.Add(newDev);
                 AddLog($"New device added: {newDev.Name} (ID: {id})");
@@ -489,18 +531,30 @@ namespace ModbusTestAvalonia
             }
         }
 
-        // Ekrandaki (textbox/combobox) değerleri, cihazın kendi ayarlarına yazar
+        // Ekrandaki (textbox/combobox) değerleri, cihazın kendi ayarlarına yazar 
         private void SyncScreenToDevice(SlaveDevice device)
         {
             if (byte.TryParse(txtSlaveId.Text, out byte id)) device.SlaveId = id;
-            device.IpAddress = txtIpAddress.Text ?? "";
-            device.Port = txtPort.Text ?? "";
             device.SelectedConnectionIndex = cmbConnectionType.SelectedIndex;
             device.SelectedFunctionIndex = cmbFunction.SelectedIndex;
             device.SelectedDataTypeIndex = cmbDataType.SelectedIndex;
             device.StartAddress = txtStartAddress.Text ?? "0";
             device.Quantity = txtQuantity.Text ?? "10";
             device.PollInterval = txtPollInterval.Text ?? "1000";
+            device.SelectedDataBitsIndex = cmbDataBits.SelectedIndex;
+            device.SelectedParityIndex = cmbParity.SelectedIndex;
+            device.SelectedStopBitsIndex = cmbStopBits.SelectedIndex;
+
+            if (cmbComPort.IsVisible)
+            {
+                device.IpAddress = cmbComPort.SelectedItem?.ToString() ?? "";
+                device.Port = cmbBaudRate.SelectedItem?.ToString() ?? "9600";
+            }
+            else
+            {
+                device.IpAddress = txtIpAddress.Text ?? "";
+                device.Port = txtPort.Text ?? "";
+            }
         }
 
         private void LstDevices_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -522,18 +576,33 @@ namespace ModbusTestAvalonia
                 _activeDevice = selectedDevice;
 
                 cmbConnectionType.SelectedIndex = selectedDevice.SelectedConnectionIndex;
-                txtIpAddress.Text = selectedDevice.IpAddress;
-                txtPort.Text = selectedDevice.Port;
+                if (selectedDevice.SelectedConnectionIndex == 1) // Serial Port (RTU)
+                {
+                    // CmbConnectionType_SelectionChanged zaten tetiklendi ve listeyi doldurdu
+                    if (!string.IsNullOrEmpty(selectedDevice.IpAddress))
+                        cmbComPort.SelectedItem = selectedDevice.IpAddress;
+
+                    if (int.TryParse(selectedDevice.Port, out int baud))
+                        cmbBaudRate.SelectedItem = baud;
+                }
+                else
+                {
+                    txtIpAddress.Text = selectedDevice.IpAddress;
+                    txtPort.Text = selectedDevice.Port;
+                }
                 txtSlaveId.Text = selectedDevice.SlaveId.ToString();
                 cmbFunction.SelectedIndex = selectedDevice.SelectedFunctionIndex;
                 cmbDataType.SelectedIndex = selectedDevice.SelectedDataTypeIndex;
+                cmbDataBits.SelectedIndex = selectedDevice.SelectedDataBitsIndex;
+                cmbParity.SelectedIndex = selectedDevice.SelectedParityIndex;
+                cmbStopBits.SelectedIndex = selectedDevice.SelectedStopBitsIndex;
                 txtStartAddress.Text = selectedDevice.StartAddress;
                 txtQuantity.Text = selectedDevice.Quantity;
                 txtPollInterval.Text = selectedDevice.PollInterval;
 
                 // Grid'i bu cihazın KENDİ verisine bağla — ayrı Clear/doldurma yok, veri zaten arka planda birikiyor
                 dataGridViewRegisters.ItemsSource = selectedDevice.RegisterData;
-
+                
                 if (selectedDevice.IsConnected && selectedDevice.Transport != null)
                 {
                     btnConnect.Content = "Disconnect";
@@ -662,6 +731,8 @@ namespace ModbusTestAvalonia
             });
         }
 
+        private static readonly int[] BaudRates = { 300, 600, 1200, 2400, 4800, 9600, 14400, 19200, 38400, 56000, 57600, 115200, 128000, 256000 };
+
         private void CmbConnectionType_SelectionChanged(object? sender, SelectionChangedEventArgs e)
         {
             if (lblIpAddress == null || lblPort == null || txtIpAddress == null || txtPort == null || cmbConnectionType == null) return;
@@ -681,16 +752,52 @@ namespace ModbusTestAvalonia
             if (selectedConnection == "Serial Port (RTU)")
             {
                 lblIpAddress.Text = "COM Port:";
-                txtIpAddress.Text = "COM3";
                 lblPort.Text = "Baud Rate:";
-                txtPort.Text = "9600";
+
+                // TextBox'ları gizle, ComboBox'ları göster
+                txtIpAddress.IsVisible = false;
+                txtPort.IsVisible = false;
+                cmbComPort.IsVisible = true;
+                cmbBaudRate.IsVisible = true;
+
+                // Mevcut COM portlarını doldur
+                cmbComPort.ItemsSource = System.IO.Ports.SerialPort.GetPortNames();
+                if (cmbComPort.SelectedIndex < 0 && cmbComPort.ItemCount > 0)
+                    cmbComPort.SelectedIndex = 0;
+
+                // Baud rate listesini doldur (henüz doldurulmadıysa)
+                if (cmbBaudRate.ItemsSource == null)
+                {
+                    cmbBaudRate.ItemsSource = BaudRates;
+                    cmbBaudRate.SelectedItem = 9600;
+                }
+
+                cmbDataBits.IsVisible = true;
+                cmbParity.IsVisible = true;
+                cmbStopBits.IsVisible = true;
+                lblDataBits.IsVisible = true;
+                lblParity.IsVisible = true;
+                lblStopBits.IsVisible = true;
             }
             else
             {
                 lblIpAddress.Text = "IP:";
-                txtIpAddress.Text = "127.0.0.1";
                 lblPort.Text = "Port:";
+
+                txtIpAddress.IsVisible = true;
+                txtPort.IsVisible = true;
+                txtIpAddress.Text = "127.0.0.1";
                 txtPort.Text = "502";
+
+                cmbComPort.IsVisible = false;
+                cmbBaudRate.IsVisible = false;
+
+                cmbDataBits.IsVisible = false;
+                cmbParity.IsVisible = false;
+                cmbStopBits.IsVisible = false;
+                lblDataBits.IsVisible = false;
+                lblParity.IsVisible = false;
+                lblStopBits.IsVisible = false;
             }
         }
     }
@@ -722,6 +829,10 @@ namespace ModbusTestAvalonia
         public string Quantity { get; set; } = "10";
         public string PollInterval { get; set; } = "1000";
 
+        public int SelectedDataBitsIndex { get; set; } = 0;
+        public int SelectedParityIndex { get; set; } = 0;
+        public int SelectedStopBitsIndex { get; set; } = 0;
+
         [JsonIgnore] public ITransport? Transport { get; set; }
         [JsonIgnore] public ModbusMaster? Master { get; set; }
         [JsonIgnore] public CancellationTokenSource? PollCts { get; set; }
@@ -740,7 +851,7 @@ namespace ModbusTestAvalonia
                 {
                     _isConnected = value;
                     OnPropertyChanged();
-                    OnPropertyChanged(nameof(StatusColor));
+                    OnPropertyChanged(nameof(StatusColor)); 
                 }
             }
         }
