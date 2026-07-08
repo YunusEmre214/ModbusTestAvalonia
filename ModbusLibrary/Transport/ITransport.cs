@@ -10,5 +10,6 @@ namespace ModbusLibrary.Transport
         Task ConnectAsync(string ipAddress, int port);
         void Disconnect();
         Task<byte[]> SendAndReceiveAsync(byte[] request);
+
     }
 }

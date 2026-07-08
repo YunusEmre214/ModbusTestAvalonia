@@ -4,6 +4,7 @@ using Avalonia.Threading;
 using ModbusLibrary.Master;
 using ModbusLibrary.Transport;
 using System;
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Linq;
@@ -24,8 +25,55 @@ namespace ModbusTestAvalonia
 
         // Function/data type ComboBox index -> string mappings (for use in the background without displaying the screen)
         private static readonly string[] FunctionNames = { "Coil", "Input", "Register", "InpReg" };
-        
+
         private static readonly string[] DataTypeNames = { "Signed", "Unsigned", "Hex", "Binary", "Float", "Float inverse", "Double", "Double Inverse", "Long", "Long Inverse" };
+
+        private class SharedConnection
+        {
+            public ITransport Transport = null!;
+            public ModbusMaster Master = null!;
+            public int RefCount = 0;
+            public SemaphoreSlim Gate = new SemaphoreSlim(1, 1); // queues simultaneous connects AND all read/write traffic on the shared line
+        }
+
+        private readonly Dictionary<string, SharedConnection> _sharedConnections = new();
+        private readonly object _sharedConnLock = new object();
+
+        private string BuildConnectionKey(string connType, string ipOrCom, string portOrBaud,
+            int dataBits, System.IO.Ports.Parity parity, System.IO.Ports.StopBits stopBits)
+        {
+            if (connType == "Serial Port (RTU)")
+                return $"SERIAL|{ipOrCom}|{portOrBaud}|{dataBits}|{parity}|{stopBits}";
+
+            return $"{connType}|{ipOrCom}|{portOrBaud}";
+        }
+
+        // --- APPLICATION-LEVEL TIMEOUT WRAPPERS ---
+        // The underlying transport has no read/write timeout of its own, so a request that never
+        // gets a response would hang forever and permanently hold the shared CommGate. These wrappers
+        // race the real call against a timer and throw TimeoutException if the timer wins.
+        private static async Task<T> WithTimeout<T>(Task<T> task, int timeoutMs, string opName)
+        {
+            var timeoutTask = Task.Delay(timeoutMs);
+            var completed = await Task.WhenAny(task, timeoutTask);
+
+            if (completed == timeoutTask)
+                throw new TimeoutException($"{opName} timed out after {timeoutMs}ms (no response from device).");
+
+            return await task; // propagate real result or real exception
+        }
+
+        private static async Task WithTimeout(Task task, int timeoutMs, string opName)
+        {
+            var timeoutTask = Task.Delay(timeoutMs);
+            var completed = await Task.WhenAny(task, timeoutTask);
+
+            if (completed == timeoutTask)
+                throw new TimeoutException($"{opName} timed out after {timeoutMs}ms (no response from device).");
+
+            await task; // propagate real exception if any
+        }
+
         public MainWindow()
         {
             InitializeComponent();
@@ -93,7 +141,7 @@ namespace ModbusTestAvalonia
             if (btnConnect.Content?.ToString() == "Disconnect")
             {
                 StopDevicePolling(_activeDevice);
-                _activeDevice.Transport?.Disconnect();
+                ReleaseSharedConnection(_activeDevice);
                 _activeDevice.IsConnected = false;
                 btnConnect.Content = "Connect";
                 AddLog($"{_activeDevice.Name}: Disconnected manually.");
@@ -110,7 +158,7 @@ namespace ModbusTestAvalonia
 
             // Write the current settings on the screen to the device (synchronize before connecting)
             SyncScreenToDevice(_activeDevice);
-            
+            string? key = null;
             try
             {
                 string ipOrCom = _activeDevice.IpAddress;
@@ -142,36 +190,107 @@ namespace ModbusTestAvalonia
                     1 => System.IO.Ports.StopBits.OnePointFive,
                     2 => System.IO.Ports.StopBits.Two,
                     _ => System.IO.Ports.StopBits.One
-                }; 
-
-                ITransport transport = selectedConnection switch
-                {
-                    "Modbus TCP/IP" => new TcpTransport(),
-                    "Modbus UDP/IP" => new UdpTransport(),
-                    "Modbus RTU Over TCP/IP" => new RtuOverTcpTransport(),
-                    "Modbus RTU Over UDP/IP" => new RtuOverUdpTransport(),
-                    "Serial Port (RTU)" => new SerialTransport(selectedDataBits, selectedParity, selectedStopBits),
-                    _ => new TcpTransport()
                 };
 
-                await transport.ConnectAsync(ipOrCom, portOrBaud);
-                
+                key = BuildConnectionKey(selectedConnection, ipOrCom, portOrBaud.ToString(),
+                                         selectedDataBits, selectedParity, selectedStopBits);
+                SharedConnection shared;
+                bool isNew;
+
+                lock (_sharedConnLock)
+                {
+                    if (!_sharedConnections.TryGetValue(key, out shared!))
+                    {
+                        ITransport transport = selectedConnection switch
+                        {
+                            "Modbus TCP/IP" => new TcpTransport(),
+                            "Modbus UDP/IP" => new UdpTransport(),
+                            "Modbus RTU Over TCP/IP" => new RtuOverTcpTransport(),
+                            "Modbus RTU Over UDP/IP" => new RtuOverUdpTransport(),
+                            "Serial Port (RTU)" => new SerialTransport(selectedDataBits, selectedParity, selectedStopBits),
+                            _ => new TcpTransport()
+                        };
+
+                        shared = new SharedConnection { Transport = transport };
+                        _sharedConnections[key] = shared;
+                        isNew = true;
+                    }
+                    else
+                    {
+                        isNew = false;
+                    }
+                }
+
+                await shared.Gate.WaitAsync();
+                try
+                {
+                    if (isNew)
+                    {
+                        await shared.Transport.ConnectAsync(ipOrCom, portOrBaud);
+                        shared.Master = new ModbusMaster(shared.Transport);
+                    }
+                    shared.RefCount++;
+                }
+                finally
+                {
+                    shared.Gate.Release();
+                }
+
                 var device = _activeDevice;
-                device.Transport = transport;
-                device.Master = new ModbusMaster(transport);
+                device.Transport = shared.Transport;
+                device.Master = shared.Master;
+                device.ConnectionKey = key;
+                device.CommGate = shared.Gate;
                 device.IsConnected = true;
 
                 btnConnect.Content = "Disconnect";
-                AddLog($"{device.Name}: Connected via {selectedConnection}");
+                AddLog($"{device.Name}: Connected via {selectedConnection} (shared conn refcount={shared.RefCount})");
 
                 StartDevicePolling(device);
             }
             catch (Exception ex)
             {
+                if (key != null)
+                {
+                    lock (_sharedConnLock)
+                    {
+                        if (_sharedConnections.TryGetValue(key, out var s) && s.RefCount == 0)
+                            _sharedConnections.Remove(key);
+                    }
+                }
                 _activeDevice.IsConnected = false;
                 btnConnect.Content = "Connect";
-                AddLog($"{_activeDevice.Name}: Connection Error - device offline or unreachable.");
+                AddLog($"{_activeDevice.Name}: Connection Error - device offline or unreachable: {ex.Message}");
             }
+        }
+        private void ReleaseSharedConnection(SlaveDevice device)
+        {
+            if (string.IsNullOrEmpty(device.ConnectionKey))
+            {
+                device.Transport?.Disconnect();
+                device.CommGate = null;
+                return;
+            }
+
+            lock (_sharedConnLock)
+            {
+                if (_sharedConnections.TryGetValue(device.ConnectionKey, out var shared))
+                {
+                    shared.RefCount--;
+                    AddLog($"{device.Name}: Shared connection refcount now {shared.RefCount}.");
+
+                    if (shared.RefCount <= 0)
+                    {
+                        shared.Transport.Disconnect();
+                        _sharedConnections.Remove(device.ConnectionKey);
+                    }
+                }
+            }
+
+            device.ConnectionKey = null;
+            device.Transport = null;
+            device.Master = null;
+            device.CommGate = null;
         }
 
 
@@ -201,14 +320,14 @@ namespace ModbusTestAvalonia
             {
                 try
                 {
-                    await PollDeviceOnce(device);
+                    await PollDeviceOnce(device, token);
                 }
                 catch (Exception)
                 {
                     if (device.IsConnected)
                     {
                         AddLog($"{device.Name}: Reading Error - Connection lost.");
-                        device.Transport?.Disconnect();
+                        ReleaseSharedConnection(device);
                         device.IsConnected = false;
 
                         if (_activeDevice == device)
@@ -225,7 +344,7 @@ namespace ModbusTestAvalonia
         }
 
         // Single round of reading — only looks at the device's own settings, NOT the textboxes on the screen
-        private async Task PollDeviceOnce(SlaveDevice device)
+        private async Task PollDeviceOnce(SlaveDevice device, CancellationToken token)
         {
             if (device.Master == null || !device.IsConnected) return;
 
@@ -234,52 +353,70 @@ namespace ModbusTestAvalonia
             if (!ushort.TryParse(device.Quantity, out ushort quantity) || quantity == 0) return;
 
             var master = device.Master;
-            int funcIndex = device.SelectedFunctionIndex; 
+            int funcIndex = device.SelectedFunctionIndex;
 
-            if (funcIndex == 0 || funcIndex == 1)
+            var gate = device.CommGate; 
+            if (gate == null) return;
+
+            bool lockAcquired = await gate.WaitAsync(2000, token);
+
+            if (!lockAcquired)
             {
-                ushort maxCoilRead = 2000;
-                bool[] allBitValues = new bool[quantity];
-                ushort remaining = quantity, currentStart = startAddress;
-                int destIndex = 0;
-
-                while (remaining > 0)
-                {
-                    ushort readCount = remaining > maxCoilRead ? maxCoilRead : remaining;
-                    bool[] chunk = funcIndex == 0
-                        ? await master.ReadCoilsAsync(slaveId, currentStart, readCount)
-                        : await master.ReadDiscreteInputsAsync(slaveId, currentStart, readCount);
-
-                    Array.Copy(chunk, 0, allBitValues, destIndex, chunk.Length);
-                    remaining -= readCount; currentStart += readCount; destIndex += readCount;
-                }
-
-                UpdateDeviceGrid(device, startAddress, quantity, 1, funcIndex, allBitValues, null, "");
+                AddLog($"Warning: {device.Name} could not acquire the communication line (Timeout).");
+                return;
             }
-            else
+
+            try
             {
-                ushort maxRegRead = 125;
-                ushort[] allValues = new ushort[quantity];
-                ushort remaining = quantity, currentStart = startAddress;
-                int destIndex = 0;
-
-                string selectedType = DataTypeNames.ElementAtOrDefault(device.SelectedDataTypeIndex) ?? "Unsigned";
-
-                while (remaining > 0)
+                if (funcIndex == 0 || funcIndex == 1)
                 {
-                    ushort readCount = remaining > maxRegRead ? maxRegRead : remaining;
-                    ushort[] chunk = funcIndex == 2
-                        ? await master.ReadHoldingRegistersAsync(slaveId, currentStart, readCount)
-                        : await master.ReadInputRegistersAsync(slaveId, currentStart, readCount);
+                    ushort maxCoilRead = 2000;
+                    bool[] allBitValues = new bool[quantity];
+                    ushort remaining = quantity, currentStart = startAddress;
+                    int destIndex = 0;
 
-                    Array.Copy(chunk, 0, allValues, destIndex, chunk.Length);
-                    remaining -= readCount; currentStart += readCount; destIndex += readCount;
+                    while (remaining > 0)
+                    {
+                        ushort readCount = remaining > maxCoilRead ? maxCoilRead : remaining;
+                        bool[] chunk = funcIndex == 0
+                            ? await WithTimeout(master.ReadCoilsAsync(slaveId, currentStart, readCount), 3000, "ReadCoils")
+                            : await WithTimeout(master.ReadDiscreteInputsAsync(slaveId, currentStart, readCount), 3000, "ReadDiscreteInputs");
+
+                        Array.Copy(chunk, 0, allBitValues, destIndex, chunk.Length);
+                        remaining -= readCount; currentStart += readCount; destIndex += readCount;
+                    }
+
+                    UpdateDeviceGrid(device, startAddress, quantity, 1, funcIndex, allBitValues, null, "");
                 }
+                else
+                {
+                    ushort maxRegRead = 125;
+                    ushort[] allValues = new ushort[quantity];
+                    ushort remaining = quantity, currentStart = startAddress;
+                    int destIndex = 0;
 
-                int step = ModbusLibrary.Utils.ModbusDataFormatter.GetStepForDataType(selectedType);
-                int expectedRows = step > 0 ? quantity / step : quantity;
+                    string selectedType = DataTypeNames.ElementAtOrDefault(device.SelectedDataTypeIndex) ?? "Unsigned";
 
-                UpdateDeviceGrid(device, startAddress, expectedRows, step, funcIndex, null, allValues, selectedType);
+                    while (remaining > 0)
+                    {
+                        ushort readCount = remaining > maxRegRead ? maxRegRead : remaining;
+                        ushort[] chunk = funcIndex == 2
+                            ? await WithTimeout(master.ReadHoldingRegistersAsync(slaveId, currentStart, readCount), 3000, "ReadHoldingRegisters")
+                            : await WithTimeout(master.ReadInputRegistersAsync(slaveId, currentStart, readCount), 3000, "ReadInputRegisters");
+
+                        Array.Copy(chunk, 0, allValues, destIndex, chunk.Length);
+                        remaining -= readCount; currentStart += readCount; destIndex += readCount;
+                    }
+
+                    int step = ModbusLibrary.Utils.ModbusDataFormatter.GetStepForDataType(selectedType);
+                    int expectedRows = step > 0 ? quantity / step : quantity;
+
+                    UpdateDeviceGrid(device, startAddress, expectedRows, step, funcIndex, null, allValues, selectedType);
+                }
+            }
+            finally
+            {
+                gate.Release();
             }
         }
 
@@ -438,6 +575,15 @@ namespace ModbusTestAvalonia
             var device = _activeDevice;
             var master = device.Master;
 
+            if (device.CommGate == null) return;
+
+            bool lockAcquired = await device.CommGate.WaitAsync(3000);
+            if (!lockAcquired)
+            {
+                AddLog($"Warning: {device.Name} could not acquire the communication line (Timeout).");
+                return;
+            }
+
             try
             {
                 byte slaveId = byte.Parse(txtSlaveId.Text ?? "1");
@@ -446,7 +592,7 @@ namespace ModbusTestAvalonia
                 {
                     string valueText = txtWriteValue.Text?.Trim().ToLower() ?? "0";
                     bool valueToWrite = valueText == "1" || valueText == "true";
-                    await master.WriteSingleCoilAsync(slaveId, address, valueToWrite);
+                    await WithTimeout(master.WriteSingleCoilAsync(slaveId, address, valueToWrite), 3000, "WriteSingleCoil");
                     AddLog($"Success: {valueToWrite} was written to Coil[{address}].");
                 }
                 else if (funcIndex == 2)
@@ -471,22 +617,31 @@ namespace ModbusTestAvalonia
                     catch (Exception parseEx)
                     {
                         AddLog($"Format Error: '{selectedType}' could not be converted. Library Error: {parseEx.Message}");
-                        return; // Cancel the operation without stopping the system!
+                        return; // Cancel the operation without stopping the system! (finally still releases the gate)
                     }
 
                     // --- STEP 2: WRITING (COMMUNICATION) OVER THE NETWORK ---
                     if (registersToWrite.Length == 1)
                     {
-                        await master.WriteSingleRegisterAsync(slaveId, address, registersToWrite[0]);
+                        await WithTimeout(master.WriteSingleRegisterAsync(slaveId, address, registersToWrite[0]), 3000, "WriteSingleRegister");
                         string formattedLogValue = ModbusLibrary.Utils.ModbusDataFormatter.FormatValue(registersToWrite, 0, selectedType);
                         AddLog($"Success: {formattedLogValue} was written to Register[{address}].");
                     }
                     else
                     {
-                        await master.WriteMultipleRegistersAsync(slaveId, address, registersToWrite);
+                        await WithTimeout(master.WriteMultipleRegistersAsync(slaveId, address, registersToWrite), 3000, "WriteMultipleRegisters");
                         AddLog($"Success: {txtWriteValue.Text} ({selectedType}) was written to Register[{address}].");
                     }
                 }
+            }
+            catch (TimeoutException tex)
+            {
+                // No response from the device at all -> the shared transport is now considered dead/unreliable.
+                AddLog($"{device.Name}: {tex.Message} — connection will be reset.");
+                StopDevicePolling(device);
+                ReleaseSharedConnection(device);
+                device.IsConnected = false;
+                if (_activeDevice == device) btnConnect.Content = "Connect";
             }
             catch (Exception ex)
             {
@@ -495,10 +650,14 @@ namespace ModbusTestAvalonia
                 if (device.IsConnected)
                 {
                     StopDevicePolling(device);
-                    device.Transport?.Disconnect();
+                    ReleaseSharedConnection(device);
                     device.IsConnected = false;
                     if (_activeDevice == device) btnConnect.Content = "Connect";
                 }
+            }
+            finally
+            {
+                device.CommGate.Release();
             }
         }
 
@@ -552,7 +711,7 @@ namespace ModbusTestAvalonia
                 StopDevicePolling(dev);
                 if (dev.IsConnected)
                 {
-                    dev.Transport?.Disconnect();
+                    ReleaseSharedConnection(dev);
                     dev.IsConnected = false;
                 }
 
@@ -639,7 +798,7 @@ namespace ModbusTestAvalonia
 
                 // Connect the grid to this device's OWN data — no separate clear/fill, data is already accumulating in the background.
                 dataGridViewRegisters.ItemsSource = selectedDevice.RegisterData;
-                
+
                 if (selectedDevice.IsConnected && selectedDevice.Transport != null)
                 {
                     btnConnect.Content = "Disconnect";
@@ -674,66 +833,81 @@ namespace ModbusTestAvalonia
 
                 if (dialog.IsConfirmed)
                 {
-                    byte slaveId;
-                    try { slaveId = byte.Parse(txtSlaveId.Text ?? "1"); } catch { slaveId = 1; }
-                    ushort address = (ushort)selectedRow.RawAddress;
+                    if (device.CommGate == null) return;
 
-                    if (funcIndex == 0) // Write Coil
+                    bool lockAcquired = await device.CommGate.WaitAsync(2000);
+                    if (!lockAcquired)
                     {
-                        try
+                        AddLog("Warning: Could not acquire the communication line (Timeout).");
+                        return;
+                    }
+                    try
+                    {
+                        byte slaveId;
+                        try { slaveId = byte.Parse(txtSlaveId.Text ?? "1"); } catch { slaveId = 1; }
+                        ushort address = (ushort)selectedRow.RawAddress;
+
+                        if (funcIndex == 0) // Write Coil
                         {
-                            bool valueToWrite = dialog.InputValue.Trim().ToLower() is "1" or "true";
-                            await master.WriteSingleCoilAsync(slaveId, address, valueToWrite);
-                            AddLog($"Success: {valueToWrite} written to Coil[{address}].");
+                            try
+                            {
+                                bool valueToWrite = dialog.InputValue.Trim().ToLower() is "1" or "true";
+                                await WithTimeout(master.WriteSingleCoilAsync(slaveId, address, valueToWrite), 3000, "WriteSingleCoil");
+                                AddLog($"Success: {valueToWrite} written to Coil[{address}].");
+                            }
+                            catch (Exception ex)
+                            {
+                                HandleCommError(device, address, ex);
+                            }
                         }
-                        catch (Exception ex)
+                        else if (funcIndex == 2) // Write Register
                         {
-                            HandleCommError(device, address, ex);
+                            ushort[] registersToWrite;
+
+                            // --- STEP 1: DATA TRANSFORMATION (LOCAL PROCESS) ---
+                            try
+                            {
+                                if (selectedType is "Signed" or "Unsigned" or "Hex" or "Binary")
+                                {
+                                    ushort valueToWrite = ModbusLibrary.Utils.ModbusDataFormatter.ParseRegisterValue(dialog.InputValue, selectedType);
+                                    registersToWrite = new ushort[] { valueToWrite };
+                                }
+                                else
+                                {
+                                    registersToWrite = ModbusLibrary.Utils.ModbusDataFormatter.BuildMultiRegisterValue(dialog.InputValue, selectedType);
+                                }
+                            }
+                            catch (Exception parseEx)
+                            {
+                                // Conversion error: Disconnect, just log
+                                AddLog($"Format Error: Failed to parse '{selectedType}'. Library Error: {parseEx.Message}");
+                                return; // finally still releases the gate
+                            }
+
+                            // --- STEP 2: WRITING OVER THE NETWORK ---
+                            try
+                            {
+                                if (registersToWrite.Length == 1)
+                                {
+                                    await WithTimeout(master.WriteSingleRegisterAsync(slaveId, address, registersToWrite[0]), 3000, "WriteSingleRegister");
+                                    string formattedLogValue = ModbusLibrary.Utils.ModbusDataFormatter.FormatValue(registersToWrite, 0, selectedType);
+                                    AddLog($"Success: {formattedLogValue} written to Register[{address}].");
+                                }
+                                else
+                                {
+                                    await WithTimeout(master.WriteMultipleRegistersAsync(slaveId, address, registersToWrite), 3000, "WriteMultipleRegisters");
+                                    AddLog($"Success: {dialog.InputValue} ({selectedType}) written to Register[{address}].");
+                                }
+                            }
+                            catch (Exception commEx)
+                            {
+                                HandleCommError(device, address, commEx);
+                            }
                         }
                     }
-                    else if (funcIndex == 2) // Write Register
+                    finally
                     {
-                        ushort[] registersToWrite;
-
-                        // --- STEP 1: DATA TRANSFORMATION (LOCAL PROCESS) ---
-                        try
-                        {
-                            if (selectedType is "Signed" or "Unsigned" or "Hex" or "Binary")
-                            {
-                                ushort valueToWrite = ModbusLibrary.Utils.ModbusDataFormatter.ParseRegisterValue(dialog.InputValue, selectedType);
-                                registersToWrite = new ushort[] { valueToWrite };
-                            }
-                            else
-                            {
-                                registersToWrite = ModbusLibrary.Utils.ModbusDataFormatter.BuildMultiRegisterValue(dialog.InputValue, selectedType);
-                            }
-                        }
-                        catch (Exception parseEx)
-                        {
-                            // Conversion error: Disconnect, just log
-                            AddLog($"Format Error: Failed to parse '{selectedType}'. Library Error: {parseEx.Message}");
-                            return;
-                        }
-
-                        // --- STEP 2: WRITING OVER THE NETWORK ---
-                        try
-                        {
-                            if (registersToWrite.Length == 1)
-                            {
-                                await master.WriteSingleRegisterAsync(slaveId, address, registersToWrite[0]);
-                                string formattedLogValue = ModbusLibrary.Utils.ModbusDataFormatter.FormatValue(registersToWrite, 0, selectedType);
-                                AddLog($"Success: {formattedLogValue} written to Register[{address}].");
-                            }
-                            else
-                            {
-                                await master.WriteMultipleRegistersAsync(slaveId, address, registersToWrite);
-                                AddLog($"Success: {dialog.InputValue} ({selectedType}) written to Register[{address}].");
-                            }
-                        }
-                        catch (Exception commEx)
-                        {
-                            HandleCommError(device, address, commEx);
-                        }
+                        device.CommGate.Release();
                     }
                 }
             }
@@ -746,13 +920,11 @@ namespace ModbusTestAvalonia
             if (device.IsConnected)
             {
                 StopDevicePolling(device);
-                device.Transport?.Disconnect();
+                ReleaseSharedConnection(device);
                 device.IsConnected = false;
                 if (_activeDevice == device) btnConnect.Content = "Connect";
             }
         }
-
-
 
         private void AddLog(string message)
         {
@@ -777,7 +949,7 @@ namespace ModbusTestAvalonia
             if (_activeDevice != null && _activeDevice.IsConnected)
             {
                 StopDevicePolling(_activeDevice);
-                _activeDevice.Transport?.Disconnect();
+                ReleaseSharedConnection(_activeDevice);
                 _activeDevice.IsConnected = false;
 
                 btnConnect.Content = "Connect";
@@ -806,7 +978,7 @@ namespace ModbusTestAvalonia
                     cmbBaudRate.SelectedItem = 9600;
                 }
 
-                pnlSerialSettings.IsVisible = true;   
+                pnlSerialSettings.IsVisible = true;
             }
             else
             {
@@ -821,7 +993,7 @@ namespace ModbusTestAvalonia
                 cmbComPort.IsVisible = false;
                 cmbBaudRate.IsVisible = false;
 
-                pnlSerialSettings.IsVisible = false;  
+                pnlSerialSettings.IsVisible = false;
             }
         }
     }
@@ -859,10 +1031,12 @@ namespace ModbusTestAvalonia
 
         [JsonIgnore] public ITransport? Transport { get; set; }
         [JsonIgnore] public ModbusMaster? Master { get; set; }
-        
+        [JsonIgnore] public string? ConnectionKey { get; set; }
+
         [JsonIgnore] public CancellationTokenSource? PollCts { get; set; }
         [JsonIgnore] public int LastGridFuncIndex { get; set; } = -1;
         [JsonIgnore] public int LastGridStep { get; set; } = -1;
+        [JsonIgnore] public SemaphoreSlim? CommGate { get; set; }
 
         // Each device has its own register grid data — the grid is linked to this.
         [JsonIgnore] public ObservableCollection<RegisterRow> RegisterData { get; } = new();
@@ -878,11 +1052,11 @@ namespace ModbusTestAvalonia
                 {
                     _isConnected = value;
                     OnPropertyChanged();
-                    OnPropertyChanged(nameof(StatusColor)); 
+                    OnPropertyChanged(nameof(StatusColor));
                 }
             }
         }
-        
+
 
         [JsonIgnore]
         public string StatusColor => IsConnected ? "LimeGreen" : "Red";
